@@ -1,0 +1,65 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+  
+  html {
+    font-family: 'Almarai', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    direction: rtl;
+    text-align: right;
+  }
+
+  body {
+    @apply bg-slate-50 text-slate-800 antialiased selection:bg-emerald-500 selection:text-white min-h-screen overflow-x-hidden;
+  }
+
+  /* Custom Modern Scrollbars */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-slate-300 rounded-full hover:bg-slate-400 transition-colors;
+  }
+}
+
+@layer utilities {
+  .glass-panel {
+    @apply bg-white/80 backdrop-blur-md border border-white/60 shadow-apple;
+  }
+  
+  .glass-card {
+    @apply bg-white/90 backdrop-blur-sm border border-slate-100 shadow-apple hover:shadow-apple-hover transition-all duration-300;
+  }
+
+  .glass-input {
+    @apply bg-slate-50/80 border border-slate-200/80 rounded-2xl px-4 py-2.5 text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-500 transition-all;
+  }
+}
+
+/* Print styling for receipts and invoices */
+@media print {
+  body {
+    background: white !important;
+    color: black !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .print-only {
+    display: block !important;
+  }
+
+  @page {
+    margin: 10mm;
+  }
+}
