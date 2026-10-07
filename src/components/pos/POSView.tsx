@@ -29,13 +29,26 @@ import {
   UserPlus,
   Edit2,
   AlertTriangle,
+  PackagePlus,
+  RefreshCw,
+  Package,
 } from 'lucide-react';
+import { initializeDatabase } from '../../db/seedData';
 
 export const POSView: React.FC = () => {
   const { farmSettings, userName, updateSettings } = useAuth();
   const { toast } = useToast();
 
-  const products = useLiveQuery(() => db.products.where('isActive').equals(1).toArray(), []);
+  // Load products (handles both boolean true and truthy isActive, auto-seeds if database is empty)
+  const products = useLiveQuery(async () => {
+    const all = await db.products.toArray();
+    if (all.length === 0) {
+      await initializeDatabase(true);
+      const reloaded = await db.products.toArray();
+      return reloaded.filter((p) => p.isActive !== false);
+    }
+    return all.filter((p) => p.isActive !== false);
+  }, []);
   const customers = useLiveQuery(() => db.customers.toArray(), []);
   const invoices = useLiveQuery(() => db.invoices.reverse().sortBy('createdAt'), []);
   const eggBatches = useLiveQuery(() => db.eggBatches.where('status').equals('available').toArray(), []);
@@ -68,6 +81,26 @@ export const POSView: React.FC = () => {
   const [showWalletReportModal, setShowWalletReportModal] = useState<boolean>(false);
   const [showTrayPriceModal, setShowTrayPriceModal] = useState<boolean>(false);
   const [trayPriceForm, setTrayPriceForm] = useState<Record<string, { retail: number; wholesale: number }>>({});
+
+  // Add Product Modal State
+  const [showAddProductModal, setShowAddProductModal] = useState<boolean>(false);
+  const [productFormData, setProductFormData] = useState<{
+    name: string;
+    category: 'table_eggs' | 'hatching_eggs' | 'meat' | 'live_birds' | 'feed_supplies' | 'service';
+    unit: string;
+    trayCapacity?: 12 | 18 | 24 | 30;
+    retailPrice: number;
+    wholesalePrice: number;
+    stockQuantity: number;
+  }>({
+    name: '',
+    category: 'table_eggs',
+    unit: 'طبق',
+    trayCapacity: 18,
+    retailPrice: 900,
+    wholesalePrice: 800,
+    stockQuantity: 100,
+  });
 
   // Mini Customer Modals State
   const [showAddCustomerModal, setShowAddCustomerModal] = useState(false);
@@ -161,6 +194,59 @@ export const POSView: React.FC = () => {
     }
     setShowDeleteCustomerModal(false);
     toast(`تم حذف العميل (${deletedName}) بنجاح!`, 'success');
+  };
+
+  // Handle Add Product from POS
+  const handleAddProduct = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!productFormData.name.trim()) {
+      toast('يرجى إدخال اسم المنتج', 'warning');
+      return;
+    }
+
+    try {
+      const newProduct: Product = {
+        id: `prod-${Date.now()}`,
+        name: productFormData.name.trim(),
+        category: productFormData.category,
+        unit: productFormData.unit.trim() || 'طبق',
+        trayCapacity:
+          productFormData.category === 'table_eggs' ? productFormData.trayCapacity : undefined,
+        retailPrice: Number(productFormData.retailPrice) || 0,
+        wholesalePrice: Number(productFormData.wholesalePrice) || 0,
+        stockQuantity: Number(productFormData.stockQuantity) || 0,
+        isActive: true,
+      };
+
+      await db.products.add(newProduct);
+      toast(`تمت إضافة المنتج (${newProduct.name}) بنجاح إلى نقاط البيع!`, 'success');
+      setShowAddProductModal(false);
+      setProductFormData({
+        name: '',
+        category: 'table_eggs',
+        unit: 'طبق',
+        trayCapacity: 18,
+        retailPrice: 900,
+        wholesalePrice: 800,
+        stockQuantity: 100,
+      });
+    } catch (err) {
+      console.error(err);
+      toast('حدث خطأ أثناء إضافة المنتج', 'error');
+    }
+  };
+
+  // Handle Restore Default Farm Products
+  const handleRestoreDefaultProducts = async () => {
+    if (confirm('هل ترغب في استعادة وتحميل قائمة المنتجات الافتراضية للمزرعة؟')) {
+      try {
+        await initializeDatabase(true);
+        toast('تم استعادة وتحديث قائمة المنتجات الافتراضية بنجاح!', 'success');
+      } catch (err) {
+        console.error(err);
+        toast('حدث خطأ أثناء استعادة المنتجات', 'error');
+      }
+    }
   };
 
   // Cart operations
@@ -592,52 +678,105 @@ export const POSView: React.FC = () => {
                   {cat.label}
                 </button>
               ))}
+
+              {/* Add Product Button */}
+              <button
+                onClick={() => setShowAddProductModal(true)}
+                className="px-3.5 py-1.5 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0"
+                title="إضافة منتج أو صنف جديد للمبيعات"
+              >
+                <PackagePlus className="w-4 h-4" />
+                <span>إضافة منتج</span>
+              </button>
             </div>
           </div>
 
-          {/* Product Cards Grid */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3">
-            {filteredProducts?.map((prod) => {
-              const price = priceType === 'wholesale' ? prod.wholesalePrice : prod.retailPrice;
+          {/* Product Cards Grid or Empty State */}
+          {filteredProducts && filteredProducts.length > 0 ? (
+            <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3">
+              {filteredProducts.map((prod) => {
+                const price = priceType === 'wholesale' ? prod.wholesalePrice : prod.retailPrice;
+                const isEgg = prod.category === 'table_eggs' || prod.category === 'hatching_eggs';
 
-              return (
-                <div
-                  key={prod.id}
-                  onClick={() => addToCart(prod)}
-                  className="p-4 rounded-3xl glass-card border border-slate-200/80 hover:border-emerald-400 transition-all cursor-pointer flex flex-col justify-between group active:scale-[0.98]"
-                >
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
-                        {prod.unit}
-                      </span>
-                      <span className="text-[10px] font-mono text-slate-400">
-                        متاح: {prod.stockQuantity}
-                      </span>
-                    </div>
-
-                    <h4 className="font-extrabold text-xs text-slate-900 line-clamp-2 mb-2 group-hover:text-emerald-700 transition-colors">
-                      {prod.name}
-                    </h4>
-                  </div>
-
-                  <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
+                return (
+                  <div
+                    key={prod.id}
+                    onClick={() => addToCart(prod)}
+                    className="p-4 rounded-3xl glass-card border border-slate-200/80 hover:border-emerald-400 hover:shadow-md transition-all cursor-pointer flex flex-col justify-between group active:scale-[0.98] relative overflow-hidden"
+                  >
                     <div>
-                      <span className="text-base font-black text-emerald-800 font-mono">
-                        {price}
-                      </span>
-                      <span className="text-[10px] font-bold text-slate-400 mr-1">
-                        {farmSettings.currency}
-                      </span>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 flex items-center gap-1">
+                          {isEgg && <Egg className="w-3 h-3 text-emerald-600" />}
+                          <span>{prod.unit}</span>
+                          {prod.trayCapacity && (
+                            <span className="font-mono text-emerald-800 font-extrabold mr-0.5">
+                              ({prod.trayCapacity}ب)
+                            </span>
+                          )}
+                        </span>
+                        <span
+                          className={`text-[10px] font-mono font-bold ${
+                            prod.stockQuantity > 0 ? 'text-slate-500' : 'text-rose-500'
+                          }`}
+                        >
+                          متاح: {prod.stockQuantity}
+                        </span>
+                      </div>
+
+                      <h4 className="font-extrabold text-xs text-slate-900 line-clamp-2 mb-2 group-hover:text-emerald-700 transition-colors">
+                        {prod.name}
+                      </h4>
                     </div>
-                    <div className="w-7 h-7 rounded-xl bg-emerald-50 group-hover:bg-emerald-600 text-emerald-700 group-hover:text-white flex items-center justify-center transition-all">
-                      <Plus className="w-4 h-4" />
+
+                    <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
+                      <div>
+                        <span className="text-base font-black text-emerald-800 font-mono">
+                          {price.toLocaleString('en-US')}
+                        </span>
+                        <span className="text-[10px] font-bold text-slate-400 mr-1">
+                          {farmSettings.currency}
+                        </span>
+                      </div>
+                      <div className="w-8 h-8 rounded-xl bg-emerald-50 group-hover:bg-emerald-600 text-emerald-700 group-hover:text-white flex items-center justify-center transition-all shadow-xs">
+                        <Plus className="w-4 h-4 stroke-[2.5]" />
+                      </div>
                     </div>
                   </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="p-10 text-center rounded-3xl bg-white border border-dashed border-slate-200 space-y-4 animate-fadeIn">
+              <div className="w-14 h-14 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center mx-auto shadow-xs">
+                <Egg className="w-7 h-7 stroke-[2]" />
+              </div>
+              <div className="max-w-sm mx-auto">
+                <h4 className="text-sm font-black text-slate-900">
+                  لا توجد منتجات معروضة في هذا التصنيف حالياً
+                </h4>
+                <p className="text-xs text-slate-500 mt-1">
+                  يمكنك استعادة المنتجات الافتراضية بنقرة واحدة أو إضافة منتجات مخصصة جديدة.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+                <button
+                  onClick={() => setShowAddProductModal(true)}
+                  className="px-4 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs flex items-center gap-1.5 transition-all"
+                >
+                  <PackagePlus className="w-4 h-4" />
+                  <span>إضافة منتج جديد</span>
+                </button>
+                <button
+                  onClick={handleRestoreDefaultProducts}
+                  className="px-4 py-2 rounded-xl text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 flex items-center gap-1.5 transition-all"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                  <span>استعادة المنتجات الافتراضية</span>
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Cart Drawer (4 cols) */}
@@ -1928,6 +2067,191 @@ export const POSView: React.FC = () => {
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal 7: Add New Product (إضافة منتج جديد لنقاط البيع) */}
+      {showAddProductModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-3xl p-6 max-w-lg w-full shadow-apple-modal border border-slate-100 text-right max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+              <div className="flex items-center gap-2 text-emerald-600">
+                <PackagePlus className="w-5 h-5" />
+                <div>
+                  <h3 className="text-base font-extrabold text-slate-900">إضافة منتج جديد لنقاط البيع</h3>
+                  <p className="text-[11px] text-slate-400">
+                    أضف صنفاً جديداً للمتجر مع تحديد الأسعار والكمية المتاحة.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowAddProductModal(false)}
+                className="p-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 transition-all"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleAddProduct} className="space-y-4 pt-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  اسم المنتج / الصنف <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="مثال: طبق بيض سمان سوبر، كرتون لحم مجهز..."
+                  value={productFormData.name}
+                  onChange={(e) =>
+                    setProductFormData((prev) => ({ ...prev, name: e.target.value }))
+                  }
+                  className="w-full glass-input text-xs py-2.5 font-bold"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    تصنيف المنتج
+                  </label>
+                  <select
+                    value={productFormData.category}
+                    onChange={(e) =>
+                      setProductFormData((prev) => ({
+                        ...prev,
+                        category: e.target.value as any,
+                      }))
+                    }
+                    className="w-full glass-input text-xs py-2.5"
+                  >
+                    <option value="table_eggs">بيض المائدة (أطباق)</option>
+                    <option value="hatching_eggs">بيض تفريخ مخصب</option>
+                    <option value="meat">لحوم سمان مجهزة</option>
+                    <option value="live_birds">طيور سمان حية</option>
+                    <option value="feed_supplies">أعلاف ومستلزمات</option>
+                    <option value="service">خدمات وتوصيل</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    وحدة البيع
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="طبق، حبة، جوز، كغم..."
+                    value={productFormData.unit}
+                    onChange={(e) =>
+                      setProductFormData((prev) => ({ ...prev, unit: e.target.value }))
+                    }
+                    className="w-full glass-input text-xs py-2.5"
+                  />
+                </div>
+              </div>
+
+              {productFormData.category === 'table_eggs' && (
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    سعة الطبق (عدد البيضات في الطبق)
+                  </label>
+                  <div className="grid grid-cols-4 gap-2">
+                    {[12, 18, 24, 30].map((size) => (
+                      <button
+                        key={size}
+                        type="button"
+                        onClick={() =>
+                          setProductFormData((prev) => ({ ...prev, trayCapacity: size as any }))
+                        }
+                        className={`py-2 rounded-xl text-xs font-bold border transition-all ${
+                          productFormData.trayCapacity === size
+                            ? 'bg-emerald-50 border-emerald-500 text-emerald-800 shadow-xs'
+                            : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                        }`}
+                      >
+                        {size} بيضة
+                        {size === 18 && <span className="block text-[9px] text-emerald-600">القياسي</span>}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    سعر التجزئة ({farmSettings.currency})
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    required
+                    value={productFormData.retailPrice}
+                    onChange={(e) =>
+                      setProductFormData((prev) => ({
+                        ...prev,
+                        retailPrice: Number(e.target.value),
+                      }))
+                    }
+                    className="w-full glass-input text-xs py-2.5 font-mono font-bold"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    سعر الجملة ({farmSettings.currency})
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    required
+                    value={productFormData.wholesalePrice}
+                    onChange={(e) =>
+                      setProductFormData((prev) => ({
+                        ...prev,
+                        wholesalePrice: Number(e.target.value),
+                      }))
+                    }
+                    className="w-full glass-input text-xs py-2.5 font-mono font-bold"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  الكمية المتاحة في المخزون
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  value={productFormData.stockQuantity}
+                  onChange={(e) =>
+                    setProductFormData((prev) => ({
+                      ...prev,
+                      stockQuantity: Number(e.target.value),
+                    }))
+                  }
+                  className="w-full glass-input text-xs py-2.5 font-mono"
+                />
+              </div>
+
+              <div className="flex gap-2 pt-3 border-t border-slate-100">
+                <button
+                  type="submit"
+                  className="flex-1 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs shadow-apple flex items-center justify-center gap-2 transition-all"
+                >
+                  <Plus className="w-4 h-4 stroke-[2.5]" />
+                  <span>إضافة المنتج فوراً</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowAddProductModal(false)}
+                  className="px-5 py-3 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition-all"
+                >
+                  إلغاء
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
