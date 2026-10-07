@@ -16,6 +16,7 @@ import {
   X,
   CreditCard,
   FileText,
+  FileSignature,
   Search,
 } from 'lucide-react';
 
@@ -294,7 +295,15 @@ export const CustomersView: React.FC = () => {
                       {customerInvoices.length > 0 ? (
                         customerInvoices.map((inv) => (
                           <tr key={inv.id} className="hover:bg-slate-50">
-                            <td className="p-2.5 font-mono font-bold">{inv.invoiceNumber}</td>
+                            <td className="p-2.5 font-mono">
+                              <div className="font-bold text-slate-800">{inv.invoiceNumber}</div>
+                              {inv.manualInvoiceNumber && (
+                                <div className="text-[10px] text-amber-800 font-sans font-bold flex items-center gap-1 mt-0.5">
+                                  <FileSignature className="w-3 h-3 text-amber-600" />
+                                  <span>يدوي: {inv.manualInvoiceNumber}</span>
+                                </div>
+                              )}
+                            </td>
                             <td className="p-2.5 font-mono">{inv.date}</td>
                             <td className="p-2.5 text-center font-mono font-bold">
                               {inv.totalAmount}

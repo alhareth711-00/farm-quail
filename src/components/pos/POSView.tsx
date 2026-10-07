@@ -32,6 +32,8 @@ import {
   PackagePlus,
   RefreshCw,
   Package,
+  FileSignature,
+  PenLine,
 } from 'lucide-react';
 import { initializeDatabase } from '../../db/seedData';
 
@@ -70,6 +72,7 @@ export const POSView: React.FC = () => {
   const [deliveryFee, setDeliveryFee] = useState<number>(0);
   const [discount, setDiscount] = useState<number>(0);
   const [orderNotes, setOrderNotes] = useState<string>('');
+  const [manualInvoiceNumber, setManualInvoiceNumber] = useState<string>('');
 
   // Search & Category Filter
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
@@ -415,6 +418,7 @@ export const POSView: React.FC = () => {
     setDeliveryFee(0);
     setDiscount(0);
     setOrderNotes('');
+    setManualInvoiceNumber('');
   };
 
   // Switch price type recalculates cart
@@ -457,6 +461,15 @@ export const POSView: React.FC = () => {
       return;
     }
 
+    // Validation: Manual Invoice Number is required for Credit / Debt sales
+    if (paymentMethod === 'credit' && !manualInvoiceNumber.trim()) {
+      toast(
+        '⚠️ يرجى إدخال رقم الفاتورة اليدوية (الدفتر الورقي) الموقعة من العميل لإتمام عملية البيع الآجل!',
+        'warning'
+      );
+      return;
+    }
+
     const invNumber = `INV-${Date.now().toString().slice(-6)}`;
     const today = new Date();
     const dateStr = today.toISOString().split('T')[0];
@@ -468,6 +481,7 @@ export const POSView: React.FC = () => {
     const newInvoice: OrderInvoice = {
       id: `inv-${Date.now()}`,
       invoiceNumber: invNumber,
+      manualInvoiceNumber: manualInvoiceNumber.trim() || undefined,
       date: dateStr,
       time: timeStr,
       customerId: selectedCustomerId,
@@ -1143,6 +1157,54 @@ export const POSView: React.FC = () => {
               </div>
             )}
 
+            {/* Manual Signed Invoice Number Input Field (رقم الفاتورة اليدوية الموقعة) */}
+            <div className="space-y-1 pt-1 border-t border-slate-100">
+              <div className="flex items-center justify-between">
+                <label className="text-[11px] font-bold text-slate-700 flex items-center gap-1.5">
+                  <FileSignature className="w-4 h-4 text-emerald-600" />
+                  <span>رقم الفاتورة اليدوية (الموقعة من العميل)</span>
+                </label>
+                {paymentMethod === 'credit' ? (
+                  <span className="text-[10px] font-black text-rose-600 bg-rose-50 px-2 py-0.5 rounded-lg border border-rose-200">
+                    * إجباري للبيع الآجل
+                  </span>
+                ) : (
+                  <span className="text-[10px] font-bold text-slate-400">
+                    (اختياري)
+                  </span>
+                )}
+              </div>
+
+              <div className="relative">
+                <div className="absolute right-3 top-2.5 pointer-events-none flex items-center gap-1">
+                  <FileSignature className={`w-4 h-4 ${paymentMethod === 'credit' ? 'text-rose-500' : 'text-slate-400'}`} />
+                  <PenLine className="w-3.5 h-3.5 text-slate-400" />
+                </div>
+                <input
+                  type="text"
+                  placeholder={
+                    paymentMethod === 'credit'
+                      ? 'أدخل رقم الفاتورة الورقية الموقعة (مطلوب)...'
+                      : 'رقم الفاتورة اليدوية / الدفتر (اختياري)...'
+                  }
+                  value={manualInvoiceNumber}
+                  onChange={(e) => setManualInvoiceNumber(e.target.value)}
+                  className={`w-full pr-12 pl-3 py-2 text-xs font-mono font-bold rounded-2xl border transition-all outline-none ${
+                    paymentMethod === 'credit' && !manualInvoiceNumber.trim()
+                      ? 'border-rose-400 bg-rose-50/40 text-rose-900 focus:border-rose-600 focus:ring-1 focus:ring-rose-500'
+                      : 'border-slate-200 bg-white text-slate-900 focus:border-emerald-500'
+                  }`}
+                />
+              </div>
+
+              {paymentMethod === 'credit' && !manualInvoiceNumber.trim() && (
+                <p className="text-[10px] text-rose-600 font-bold flex items-center gap-1 mt-0.5">
+                  <AlertTriangle className="w-3 h-3 shrink-0" />
+                  <span>يشترط إدخال رقم الفاتورة اليدوية لتوثيق الدين على العميل محاسبياً.</span>
+                </p>
+              )}
+            </div>
+
             {/* Summary Totals */}
             <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 space-y-1 text-xs">
               <div className="flex justify-between text-slate-500">
@@ -1245,6 +1307,11 @@ export const POSView: React.FC = () => {
 
                   <div className="py-2 border-b border-dashed border-black space-y-0.5 text-[11px]">
                     <div>رقم الفاتورة: <b className="font-bold">{printedInvoice.invoiceNumber}</b></div>
+                    {printedInvoice.manualInvoiceNumber && (
+                      <div className="text-[11px] font-bold">
+                        رقم الفاتورة اليدوية: <span className="underline font-bold font-mono">{printedInvoice.manualInvoiceNumber}</span>
+                      </div>
+                    )}
                     <div>التاريخ: {printedInvoice.date} {printedInvoice.time}</div>
                     <div>العميل: {printedInvoice.customerName}</div>
                     <div>الكاشير: {printedInvoice.cashierName}</div>
@@ -1332,6 +1399,11 @@ export const POSView: React.FC = () => {
                       <div className="font-mono font-bold text-slate-800 mt-1">
                         {printedInvoice.invoiceNumber}
                       </div>
+                      {printedInvoice.manualInvoiceNumber && (
+                        <div className="text-rose-700 font-mono text-[11px] font-black mt-0.5">
+                          رقم الفاتورة اليدوية: {printedInvoice.manualInvoiceNumber}
+                        </div>
+                      )}
                       <div className="text-slate-500 font-mono text-[11px]">
                         التاريخ: {printedInvoice.date} {printedInvoice.time}
                       </div>
@@ -1573,7 +1645,15 @@ export const POSView: React.FC = () => {
                           {todayInvs.length > 0 ? (
                             todayInvs.map((inv) => (
                               <tr key={inv.id} className="hover:bg-slate-50">
-                                <td className="p-2.5 font-mono font-bold text-slate-800">{inv.invoiceNumber}</td>
+                                <td className="p-2.5 font-mono text-slate-800">
+                                  <div className="font-bold">{inv.invoiceNumber}</div>
+                                  {inv.manualInvoiceNumber && (
+                                    <div className="text-[10px] text-amber-800 font-sans font-bold flex items-center gap-1 mt-0.5">
+                                      <FileSignature className="w-3 h-3 text-amber-600" />
+                                      <span>يدوي: {inv.manualInvoiceNumber}</span>
+                                    </div>
+                                  )}
+                                </td>
                                 <td className="p-2.5 font-mono text-slate-500">{inv.time}</td>
                                 <td className="p-2.5 font-bold text-slate-900">{inv.customerName}</td>
                                 <td className="p-2.5">

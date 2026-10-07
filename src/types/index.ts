@@ -374,6 +374,7 @@ export type PaymentMethod =
 export interface OrderInvoice {
   id: string;
   invoiceNumber: string; // "INV-2026-0001"
+  manualInvoiceNumber?: string; // رقم الفاتورة اليدوية / الدفترية الموقعة من العميل
   date: string;
   time: string;
   customerId?: string;
