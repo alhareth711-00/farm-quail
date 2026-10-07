@@ -91,6 +91,7 @@ export const POSView: React.FC = () => {
     trayCapacity?: 12 | 18 | 24 | 30;
     retailPrice: number;
     wholesalePrice: number;
+    costPrice: number;
     stockQuantity: number;
   }>({
     name: '',
@@ -99,6 +100,7 @@ export const POSView: React.FC = () => {
     trayCapacity: 18,
     retailPrice: 900,
     wholesalePrice: 800,
+    costPrice: 600,
     stockQuantity: 100,
   });
 
@@ -214,6 +216,7 @@ export const POSView: React.FC = () => {
           productFormData.category === 'table_eggs' ? productFormData.trayCapacity : undefined,
         retailPrice: Number(productFormData.retailPrice) || 0,
         wholesalePrice: Number(productFormData.wholesalePrice) || 0,
+        costPrice: Number(productFormData.costPrice) || 0,
         stockQuantity: Number(productFormData.stockQuantity) || 0,
         isActive: true,
       };
@@ -228,6 +231,7 @@ export const POSView: React.FC = () => {
         trayCapacity: 18,
         retailPrice: 900,
         wholesalePrice: 800,
+        costPrice: 600,
         stockQuantity: 100,
       });
     } catch (err) {
@@ -272,6 +276,7 @@ export const POSView: React.FC = () => {
             quantity: 1,
             unit: product.unit,
             unitPrice,
+            costPrice: product.costPrice || 0,
             total: unitPrice,
             batchId: isEgg && oldest ? 'fifo' : undefined,
             productionDate: isEgg && oldest ? oldest.productionDate : undefined,
@@ -457,6 +462,9 @@ export const POSView: React.FC = () => {
     const dateStr = today.toISOString().split('T')[0];
     const timeStr = today.toTimeString().slice(0, 5);
 
+    const totalCost = cart.reduce((sum, item) => sum + (item.costPrice || 0) * item.quantity, 0);
+    const estimatedProfit = Math.max(0, (totalAmount - Number(deliveryFee)) - totalCost);
+
     const newInvoice: OrderInvoice = {
       id: `inv-${Date.now()}`,
       invoiceNumber: invNumber,
@@ -469,6 +477,8 @@ export const POSView: React.FC = () => {
       deliveryFee: Number(deliveryFee),
       discount: Number(discount),
       totalAmount,
+      totalCost,
+      estimatedProfit,
       paidAmount: effectivePaidAmount,
       remainingAmount,
       paymentMethod,
@@ -2191,7 +2201,7 @@ export const POSView: React.FC = () => {
                 </div>
               )}
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
                     سعر التجزئة ({farmSettings.currency})
@@ -2229,7 +2239,43 @@ export const POSView: React.FC = () => {
                     className="w-full glass-input text-xs py-2.5 font-mono font-bold"
                   />
                 </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    التكلفة التقديرية ({farmSettings.currency})
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    required
+                    value={productFormData.costPrice}
+                    onChange={(e) =>
+                      setProductFormData((prev) => ({
+                        ...prev,
+                        costPrice: Number(e.target.value),
+                      }))
+                    }
+                    className="w-full glass-input text-xs py-2.5 font-mono font-bold text-rose-700"
+                  />
+                </div>
               </div>
+
+              {/* Profit preview if costPrice entered */}
+              {productFormData.costPrice > 0 && productFormData.retailPrice > 0 && (
+                <div className="p-3 rounded-2xl bg-emerald-50 border border-emerald-200 text-[11px] flex items-center justify-between">
+                  <span className="font-bold text-emerald-900">هامش ربح التجزئة المقدر:</span>
+                  <span className="font-mono font-black text-emerald-800">
+                    {(productFormData.retailPrice - productFormData.costPrice).toLocaleString('en-US')}{' '}
+                    {farmSettings.currency} (
+                    {Math.round(
+                      ((productFormData.retailPrice - productFormData.costPrice) /
+                        productFormData.retailPrice) *
+                        100
+                    )}
+                    %)
+                  </span>
+                </div>
+              )}
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">

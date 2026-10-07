@@ -332,6 +332,7 @@ export interface Product {
   trayCapacity?: 12 | 18 | 24 | 30; // for table eggs (الافتراضي 18 بيضة)
   retailPrice: number; // سعر التجزئة
   wholesalePrice: number; // سعر الجملة
+  costPrice?: number; // التكلفة التقديرية (لحساب هوامش الأرباح)
   stockQuantity: number;
   barcode?: string;
   imageUrl?: string; // صورة المنتج (URL أو Base64)
@@ -356,6 +357,7 @@ export interface OrderItem {
   quantity: number;
   unit: string;
   unitPrice: number;
+  costPrice?: number; // التكلفة التقديرية للقطعة في الفاتورة لحساب الأرباح
   total: number;
   productionDate?: string; // تاريخ إنتاج البيض المباع من الدفعات المتوفرة
   batchId?: string; // معرف الدفعة المصروفة
@@ -383,6 +385,8 @@ export interface OrderInvoice {
   totalAmount: number;
   paidAmount: number;
   remainingAmount: number; // الدين الجديد المضاف
+  totalCost?: number; // إجمالي التكلفة التقديرية للفاتورة
+  estimatedProfit?: number; // إجمالي هامش الربح المقدر (totalAmount - totalCost - deliveryFee)
   paymentMethod: PaymentMethod;
   notes?: string;
   cashierName: string;
