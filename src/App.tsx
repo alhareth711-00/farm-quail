@@ -18,6 +18,7 @@ import { FatteningMeatView } from './components/fattening/FatteningMeatView';
 import { HealthFeedView } from './components/healthFeed/HealthFeedView';
 import { POSView } from './components/pos/POSView';
 import { CustomersView } from './components/customers/CustomersView';
+import { ProductsManagementView } from './components/products/ProductsManagementView';
 import { FinanceView } from './components/finance/FinanceView';
 import { CashRegisterView } from './components/finance/CashRegisterView';
 import { EquipmentLogView } from './components/equipment/EquipmentLogView';
@@ -43,7 +44,7 @@ const MainAppContent: React.FC = () => {
 
   // Ensure worker cannot stay on manager tabs
   useEffect(() => {
-    const managerTabs: NavTab[] = ['pos', 'customers', 'finance', 'analytics', 'settings'];
+    const managerTabs: NavTab[] = ['pos', 'products', 'customers', 'finance', 'analytics', 'settings'];
     if (!isManager && managerTabs.includes(activeTab)) {
       setActiveTab('dashboard');
       toast('تم تحويلك إلى لوحة التحكم (البيانات المالية مقتصرة على وضع المدير)', 'info');
@@ -87,6 +88,8 @@ const MainAppContent: React.FC = () => {
         return <CashRegisterView />;
       case 'pos':
         return <POSView />;
+      case 'products':
+        return <ProductsManagementView onNavigateToPOS={() => setActiveTab('pos')} />;
       case 'customers':
         return <CustomersView />;
       case 'employees_payroll':

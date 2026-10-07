@@ -334,6 +334,7 @@ export interface Product {
   wholesalePrice: number; // سعر الجملة
   stockQuantity: number;
   barcode?: string;
+  imageUrl?: string; // صورة المنتج (URL أو Base64)
   isActive: boolean;
 }
 

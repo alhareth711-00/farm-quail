@@ -19,6 +19,7 @@ import {
   Skull,
   Coins,
   UserCheck,
+  Package,
 } from 'lucide-react';
 
 export type NavTab =
@@ -34,6 +35,7 @@ export type NavTab =
   | 'health_feed'
   | 'cash_register'
   | 'pos'
+  | 'products'
   | 'customers'
   | 'employees_payroll'
   | 'finance'
@@ -108,6 +110,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onSelectTab }) => {
       id: 'pos',
       label: 'نقاط البيع والفواتير',
       icon: <ShoppingCart className="w-5 h-5" />,
+      managerOnly: true,
+    },
+    {
+      id: 'products',
+      label: 'إدارة المنتجات',
+      icon: <Package className="w-5 h-5" />,
       managerOnly: true,
     },
     {

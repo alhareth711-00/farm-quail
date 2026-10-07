@@ -188,13 +188,22 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
             <span>سجل النفوق التفصيلي</span>
           </button>
           {isManager && (
-            <button
-              onClick={() => onNavigate('cash_register')}
-              className="px-4 py-2.5 rounded-2xl bg-amber-500 hover:bg-amber-400 text-white text-xs font-extrabold flex items-center gap-2 shadow-sm transition-all"
-            >
-              <Coins className="w-4 h-4" />
-              <span>مطابقة الصندوق والوردية</span>
-            </button>
+            <>
+              <button
+                onClick={() => onNavigate('products')}
+                className="px-4 py-2.5 rounded-2xl bg-teal-700/80 hover:bg-teal-700 text-white text-xs font-bold flex items-center gap-2 transition-all border border-teal-400/40"
+              >
+                <Package className="w-4 h-4" />
+                <span>إدارة المنتجات والأسعار</span>
+              </button>
+              <button
+                onClick={() => onNavigate('cash_register')}
+                className="px-4 py-2.5 rounded-2xl bg-amber-500 hover:bg-amber-400 text-white text-xs font-extrabold flex items-center gap-2 shadow-sm transition-all"
+              >
+                <Coins className="w-4 h-4" />
+                <span>مطابقة الصندوق والوردية</span>
+              </button>
+            </>
           )}
         </div>
       </div>

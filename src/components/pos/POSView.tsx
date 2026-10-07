@@ -724,9 +724,23 @@ export const POSView: React.FC = () => {
                         </span>
                       </div>
 
-                      <h4 className="font-extrabold text-xs text-slate-900 line-clamp-2 mb-2 group-hover:text-emerald-700 transition-colors">
-                        {prod.name}
-                      </h4>
+                      <div className="flex items-start gap-2 mb-2">
+                        {prod.imageUrl && (
+                          <div className="w-10 h-10 rounded-xl overflow-hidden bg-slate-50 border border-slate-200 shrink-0 shadow-2xs">
+                            <img
+                              src={prod.imageUrl}
+                              alt={prod.name}
+                              className="w-full h-full object-cover"
+                              onError={(e) => {
+                                (e.target as HTMLImageElement).style.display = 'none';
+                              }}
+                            />
+                          </div>
+                        )}
+                        <h4 className="font-extrabold text-xs text-slate-900 line-clamp-2 group-hover:text-emerald-700 transition-colors flex-1">
+                          {prod.name}
+                        </h4>
+                      </div>
                     </div>
 
                     <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
