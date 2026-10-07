@@ -28,6 +28,8 @@ import type {
   EmployeeAttendanceRecord,
   EmployeeAdvanceRecord,
   SalaryPaymentRecord,
+  Account,
+  JournalEntry,
 } from '../types';
 
 export class QuailFarmDB extends Dexie {
@@ -60,6 +62,8 @@ export class QuailFarmDB extends Dexie {
   employeeAttendance!: Table<EmployeeAttendanceRecord, string>;
   employeeAdvances!: Table<EmployeeAdvanceRecord, string>;
   salaryPayments!: Table<SalaryPaymentRecord, string>;
+  accounts!: Table<Account, string>;
+  journalEntries!: Table<JournalEntry, string>;
 
   constructor() {
     super('QuailFarmERP_DB');
@@ -113,6 +117,11 @@ export class QuailFarmDB extends Dexie {
       employeeAttendance: 'id, employeeId, date, status',
       employeeAdvances: 'id, employeeId, date',
       salaryPayments: 'id, employeeId, month, paymentDate',
+    });
+
+    this.version(7).stores({
+      accounts: 'id, code, name, type, subType, normalBalance, isActive',
+      journalEntries: 'id, entryNumber, date, referenceType, referenceId, status',
     });
   }
 }

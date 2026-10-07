@@ -26,6 +26,7 @@ import { MortalityLogView } from './components/mortality/MortalityLogView';
 import { AnalyticsView } from './components/analytics/AnalyticsView';
 import { SettingsView } from './components/settings/SettingsView';
 import { EmployeesPayrollView } from './components/payroll/EmployeesPayrollView';
+import { AccountingView } from './components/accounting/AccountingView';
 
 const MainAppContent: React.FC = () => {
   const { isManager } = useAuth();
@@ -44,7 +45,16 @@ const MainAppContent: React.FC = () => {
 
   // Ensure worker cannot stay on manager tabs
   useEffect(() => {
-    const managerTabs: NavTab[] = ['pos', 'products', 'customers', 'finance', 'analytics', 'settings'];
+    const managerTabs: NavTab[] = [
+      'pos',
+      'products',
+      'customers',
+      'employees_payroll',
+      'finance',
+      'accounting',
+      'analytics',
+      'settings',
+    ];
     if (!isManager && managerTabs.includes(activeTab)) {
       setActiveTab('dashboard');
       toast('تم تحويلك إلى لوحة التحكم (البيانات المالية مقتصرة على وضع المدير)', 'info');
@@ -96,6 +106,8 @@ const MainAppContent: React.FC = () => {
         return <EmployeesPayrollView />;
       case 'finance':
         return <FinanceView />;
+      case 'accounting':
+        return <AccountingView />;
       case 'analytics':
         return <AnalyticsView />;
       case 'settings':

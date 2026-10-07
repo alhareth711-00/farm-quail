@@ -4,6 +4,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import type { Customer, ReceiptVoucher, OrderInvoice, VoucherPaymentType } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
+import { recordReceiptVoucherJournalEntry } from '../../services/accountingService';
 import {
   Users,
   Plus,
@@ -88,6 +89,13 @@ export const CustomersView: React.FC = () => {
     };
 
     await db.receiptVouchers.add(newVoucher);
+
+    // Record automated double-entry journal entry for debt collection
+    try {
+      await recordReceiptVoucherJournalEntry(newVoucher);
+    } catch (accErr) {
+      console.warn('Accounting voucher entry error:', accErr);
+    }
 
     // Deduct from customer debt
     const updatedDebt = Math.max(0, selectedCustomer.currentDebt - amt);

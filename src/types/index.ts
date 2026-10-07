@@ -551,3 +551,62 @@ export interface SalaryPaymentRecord {
   recordedBy: string;
   createdAt: string;
 }
+
+// --- 13. Core Accounting: Chart of Accounts & Double-Entry Bookkeeping ---
+export type AccountType = 'asset' | 'liability' | 'equity' | 'revenue' | 'expense';
+export type NormalBalance = 'debit' | 'credit';
+
+export interface Account {
+  id: string; // e.g. "acc-10101"
+  code: string; // e.g. "10101"
+  name: string; // e.g. "الصندوق الرئيسي (كاش)"
+  type: AccountType;
+  subType?: string; // e.g. "cash", "bank_wallet", "receivable", "payable", "sales", "cogs", "opex"
+  normalBalance: NormalBalance;
+  currentBalance: number;
+  currency: string; // "YER"
+  parentId?: string;
+  isSystem: boolean; // cannot be deleted
+  isActive: boolean;
+  description?: string;
+  createdAt: string;
+}
+
+export interface JournalEntryLine {
+  id: string;
+  accountId: string;
+  accountCode: string;
+  accountName: string;
+  debit: number; // مدين
+  credit: number; // دائن
+  description?: string; // بيان السطر
+  partyId?: string; // معرف العميل أو المورد إذا وجد
+  partyName?: string;
+}
+
+export type JournalReferenceType = 
+  | 'sale_invoice' 
+  | 'receipt_voucher' 
+  | 'expense' 
+  | 'purchase' 
+  | 'salary' 
+  | 'manual_entry';
+
+export interface JournalEntry {
+  id: string;
+  entryNumber: string; // e.g. "JV-2026-0001"
+  date: string; // YYYY-MM-DD
+  time: string; // HH:mm
+  description: string;
+  referenceType: JournalReferenceType;
+  referenceId?: string;
+  referenceNumber?: string;
+  manualInvoiceNumber?: string; // رقم الفاتورة اليدوية إن وجد
+  lines: JournalEntryLine[];
+  totalDebit: number;
+  totalCredit: number;
+  isBalanced: boolean;
+  status: 'posted' | 'draft' | 'cancelled';
+  createdBy: string;
+  createdAt: string;
+}

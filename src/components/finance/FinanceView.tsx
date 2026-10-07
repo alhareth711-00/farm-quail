@@ -4,6 +4,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import type { ExpenseRecord, ExpenseCategory, FarmPurchaseRecord, CustomExpenseCategory } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
+import { recordExpenseJournalEntry } from '../../services/accountingService';
 import {
   WalletCards,
   Plus,
@@ -167,6 +168,14 @@ export const FinanceView: React.FC = () => {
     };
 
     await db.expenses.add(newExp);
+
+    // Record automated double-entry journal entry for expense
+    try {
+      await recordExpenseJournalEntry(newExp);
+    } catch (accErr) {
+      console.warn('Accounting expense journal error:', accErr);
+    }
+
     toast(`تم تسجيل سند الصرف بمبلغ ${amountNum.toLocaleString('ar-SA')} ${farmSettings.currency}!`, 'success');
     setShowAddExpenseModal(false);
     setExpAmount('');

@@ -36,6 +36,7 @@ import {
   PenLine,
 } from 'lucide-react';
 import { initializeDatabase } from '../../db/seedData';
+import { recordSaleJournalEntry } from '../../services/accountingService';
 
 export const POSView: React.FC = () => {
   const { farmSettings, userName, updateSettings } = useAuth();
@@ -503,6 +504,14 @@ export const POSView: React.FC = () => {
 
     // Save invoice
     await db.invoices.add(newInvoice);
+
+    // Record automated double-entry journal entry in accounting ledger
+    try {
+      await recordSaleJournalEntry(newInvoice);
+    } catch (accErr: any) {
+      console.error('Accounting journal entry error:', accErr);
+      toast(`تنبيه محاسبي: ${accErr?.message || 'تعذر تسجيل القيد المحاسبي'}`, 'warning');
+    }
 
     // Update customer debt if credit/partial
     if (activeCustomer && remainingAmount > 0) {

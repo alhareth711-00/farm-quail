@@ -39,6 +39,7 @@ export type NavTab =
   | 'customers'
   | 'employees_payroll'
   | 'finance'
+  | 'accounting'
   | 'analytics'
   | 'settings';
 
@@ -134,6 +135,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onSelectTab }) => {
       id: 'finance',
       label: 'المصروفات والمالية والأرباح',
       icon: <WalletCards className="w-5 h-5" />,
+      managerOnly: true,
+    },
+    {
+      id: 'accounting',
+      label: 'شجرة الحسابات والقيود اليومية',
+      icon: <Scale className="w-5 h-5" />,
       managerOnly: true,
     },
     {
