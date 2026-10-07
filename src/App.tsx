@@ -105,7 +105,12 @@ const MainAppContent: React.FC = () => {
       case 'employees_payroll':
         return <EmployeesPayrollView />;
       case 'finance':
-        return <FinanceView />;
+        return (
+          <FinanceView
+            onNavigateToAccounting={() => setActiveTab('accounting')}
+            onNavigateToPOS={() => setActiveTab('pos')}
+          />
+        );
       case 'accounting':
         return <AccountingView />;
       case 'analytics':

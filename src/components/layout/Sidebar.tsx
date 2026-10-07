@@ -133,7 +133,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onSelectTab }) => {
     },
     {
       id: 'finance',
-      label: 'المصروفات والمالية والأرباح',
+      label: 'المالية والمحاسبة',
       icon: <WalletCards className="w-5 h-5" />,
       managerOnly: true,
     },

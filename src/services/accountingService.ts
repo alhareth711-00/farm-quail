@@ -333,6 +333,18 @@ export const DEFAULT_CHART_OF_ACCOUNTS: Omit<Account, 'currentBalance' | 'create
     description: 'المصروفات النثرية والقرطاسية والمصروفات المتنوعة',
   },
   {
+    id: 'acc-50108',
+    code: '50108',
+    name: 'مصروفات نشارة الخشب ومستلزمات التعبئة والأطباق',
+    type: 'expense',
+    subType: 'packaging',
+    normalBalance: 'debit',
+    currency: 'YER',
+    isSystem: true,
+    isActive: true,
+    description: 'تكاليف نشارة خشب العنابر، كراتين البيض، والأطباق البلاستيكية والورقية',
+  },
+  {
     id: 'acc-50201',
     code: '50201',
     name: 'الخصم المسموح به للعملاء (Sales Discount)',
@@ -658,6 +670,7 @@ export async function recordExpenseJournalEntry(expense: ExpenseRecord): Promise
       expenseAccountName = 'مصروفات شراء واستخدام الأعلاف';
       break;
     case 'medication_supplies':
+    case 'medications_vitamins':
       expenseAccountId = 'acc-50102';
       expenseAccountCode = '50102';
       expenseAccountName = 'مصروفات الأدوية واللقاحات البيطرية';
@@ -667,15 +680,26 @@ export async function recordExpenseJournalEntry(expense: ExpenseRecord): Promise
       expenseAccountCode = '50103';
       expenseAccountName = 'مصروفات المحروقات وبترول التوصيل';
       break;
+    case 'salaries_advances':
+      expenseAccountId = 'acc-50104';
+      expenseAccountCode = '50104';
+      expenseAccountName = 'مصروفات رواتب وأجور وسلفيات العمال';
+      break;
     case 'equipment_maintenance':
+    case 'utilities_maintenance':
       expenseAccountId = 'acc-50105';
       expenseAccountCode = '50105';
-      expenseAccountName = 'مصروفات صيانة الأقفاص والمعدات';
+      expenseAccountName = 'مصروفات صيانة الأقفاص والمعدات والعنابر';
       break;
     case 'electricity_water':
       expenseAccountId = 'acc-50106';
       expenseAccountCode = '50106';
       expenseAccountName = 'مصروفات كهرباء ومياه وتشغيل';
+      break;
+    case 'packaging_bedding':
+      expenseAccountId = 'acc-50108';
+      expenseAccountCode = '50108';
+      expenseAccountName = 'مصروفات نشارة الخشب ومستلزمات التعبئة والأطباق';
       break;
   }
 
