@@ -24,6 +24,17 @@ import {
   FileSpreadsheet,
   Tag,
   Flame,
+  TrendingDown,
+  Minus,
+  ChevronDown,
+  ChevronUp,
+  BarChart3,
+  ArrowUpRight,
+  ArrowDownRight,
+  Eye,
+  EyeOff,
+  CalendarDays,
+  Award,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { calculateFlockAgeInfo } from '../../utils/birdAgeUtils';
@@ -366,6 +377,227 @@ export const EggProductionLogView: React.FC = () => {
       toast('تم حذف السجل بنجاح', 'info');
     }
   };
+
+  // --- Helpers for Date Formatting ---
+  const getArabicDayDetails = (dateStr: string) => {
+    try {
+      const [y, m, d] = dateStr.split('-').map(Number);
+      const date = new Date(y, m - 1, d);
+      const days = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+      const months = [
+        'يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو',
+        'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'
+      ];
+
+      const today = new Date();
+      const isToday = today.toISOString().split('T')[0] === dateStr;
+
+      const yesterday = new Date();
+      yesterday.setDate(today.getDate() - 1);
+      const isYesterday = yesterday.toISOString().split('T')[0] === dateStr;
+
+      return {
+        dayName: days[date.getDay()],
+        monthName: months[date.getMonth()],
+        formatted: `${d} ${months[date.getMonth()]} ${y}`,
+        full: `${days[date.getDay()]}، ${d} ${months[date.getMonth()]} ${y}`,
+        badge: isToday ? 'اليوم' : isYesterday ? 'أمس' : null,
+        dayNumber: d,
+      };
+    } catch {
+      return {
+        dayName: '',
+        monthName: '',
+        formatted: dateStr,
+        full: dateStr,
+        badge: null,
+        dayNumber: 0,
+      };
+    }
+  };
+
+  // --- Daily Aggregation & Comparison Logic for History Tab ---
+  const [historySubTab, setHistorySubTab] = useState<'comparison' | 'flat'>('comparison');
+  const [expandedDays, setExpandedDays] = useState<Record<string, boolean>>({});
+  const [historyRange, setHistoryRange] = useState<'7days' | '30days' | 'all'>('30days');
+
+  const toggleDayExpanded = (date: string) => {
+    setExpandedDays((prev) => ({ ...prev, [date]: !prev[date] }));
+  };
+
+  const expandAllDays = () => {
+    const allExpanded: Record<string, boolean> = {};
+    dailyAggregates.forEach((d) => {
+      allExpanded[d.date] = true;
+    });
+    setExpandedDays(allExpanded);
+  };
+
+  const collapseAllDays = () => {
+    setExpandedDays({});
+  };
+
+  const handleDeleteDay = async (date: string) => {
+    if (confirm(`هل أنت متأكد من حذف جميع سجلات إنتاج يوم ${date} بالكامل؟ لا يمكن التراجع عن هذه الخطوة.`)) {
+      await db.eggLogs.where('collectionDate').equals(date).delete();
+      toast(`تم حذف جميع سجلات إنتاج يوم ${date} بنجاح`, 'info');
+    }
+  };
+
+  // Compute daily aggregates from logs
+  const dailyAggregates = React.useMemo(() => {
+    if (!logs || logs.length === 0) return [];
+
+    // 1. Group logs by collectionDate
+    const groupMap = new Map<string, EggProductionLog[]>();
+    logs.forEach((log) => {
+      const d = log.collectionDate;
+      if (!groupMap.has(d)) {
+        groupMap.set(d, []);
+      }
+      groupMap.get(d)!.push(log);
+    });
+
+    // 2. Sort all dates ascending to accurately calculate day-to-day progression
+    const sortedDatesAsc = Array.from(groupMap.keys()).sort((a, b) => a.localeCompare(b));
+
+    // 3. Aggregate each day
+    const aggregatedAsc: {
+      date: string;
+      totalActual: number;
+      totalBroken: number;
+      totalMarketable: number;
+      totalPackagedTrays: number;
+      looseEggs: number;
+      traySize: number;
+      avgLayingRate: number;
+      liveFemalesCount: number;
+      entriesCount: number;
+      primaryCollector: string;
+      primaryTime: string;
+      records: EggProductionLog[];
+      diffActual: number | null;
+      pctChange: number | null;
+      diffLayingRate: number | null;
+    }[] = [];
+
+    let prevDay: typeof aggregatedAsc[0] | null = null;
+
+    sortedDatesAsc.forEach((dateStr) => {
+      const records = groupMap.get(dateStr) || [];
+      const totalActual = records.reduce((sum, r) => sum + (r.actualEggs || 0), 0);
+      const totalBroken = records.reduce((sum, r) => sum + (r.brokenEggs || 0), 0);
+      const totalMarketable = records.reduce((sum, r) => sum + (r.marketableEggs || r.actualEggs || 0), 0);
+      const totalPackagedTrays = records.reduce((sum, r) => sum + (r.packagedTraysCount || 0), 0);
+      const liveFemalesCount = records.reduce((sum, r) => sum + (r.liveFemalesCount || 0), 0);
+      const traySizeUsed = records[0]?.traySize || 18;
+      const looseEggs = totalMarketable % traySizeUsed;
+      const primaryCollector = records[0]?.recordedBy || 'عامل المزرعة';
+      const primaryTime = records[0]?.collectionTime || '17:30';
+
+      // Laying rate: weighted by live females if present, else simple average
+      let avgLayingRate = 0;
+      if (liveFemalesCount > 0) {
+        avgLayingRate = Math.round((totalActual / liveFemalesCount) * 1000) / 10;
+      } else if (records.length > 0) {
+        const sumRate = records.reduce((sum, r) => sum + (r.layingRatePercent || 0), 0);
+        avgLayingRate = Math.round((sumRate / records.length) * 10) / 10;
+      }
+
+      // Compute diff vs previous chronological day
+      let diffActual: number | null = null;
+      let pctChange: number | null = null;
+      let diffLayingRate: number | null = null;
+
+      if (prevDay) {
+        diffActual = totalActual - prevDay.totalActual;
+        pctChange = prevDay.totalActual > 0 ? Math.round(((diffActual / prevDay.totalActual) * 100) * 10) / 10 : 0;
+        diffLayingRate = Math.round((avgLayingRate - prevDay.avgLayingRate) * 10) / 10;
+      }
+
+      const currentDay = {
+        date: dateStr,
+        totalActual,
+        totalBroken,
+        totalMarketable,
+        totalPackagedTrays,
+        looseEggs,
+        traySize: traySizeUsed,
+        avgLayingRate,
+        liveFemalesCount,
+        entriesCount: records.length,
+        primaryCollector,
+        primaryTime,
+        records,
+        diffActual,
+        pctChange,
+        diffLayingRate,
+      };
+
+      aggregatedAsc.push(currentDay);
+      prevDay = currentDay;
+    });
+
+    // 4. Return sorted descending (newest first for presentation)
+    return [...aggregatedAsc].reverse();
+  }, [logs]);
+
+  // Filtered daily aggregates based on range or date filter
+  const filteredDailyAggregates = React.useMemo(() => {
+    let result = dailyAggregates;
+
+    if (filterDate) {
+      result = result.filter((d) => d.date === filterDate);
+    } else if (historyRange === '7days') {
+      result = result.slice(0, 7);
+    } else if (historyRange === '30days') {
+      result = result.slice(0, 30);
+    }
+
+    return result;
+  }, [dailyAggregates, filterDate, historyRange]);
+
+  // Overall statistics for top comparison cards
+  const stats = React.useMemo(() => {
+    if (dailyAggregates.length === 0) {
+      return {
+        totalDays: 0,
+        avgDailyProduction: 0,
+        peakDay: null as typeof dailyAggregates[0] | null,
+        latestDay: null as typeof dailyAggregates[0] | null,
+        overallAvgLayingRate: 0,
+        totalEggsAllTime: 0,
+      };
+    }
+
+    const totalEggsAllTime = dailyAggregates.reduce((sum, d) => sum + d.totalActual, 0);
+    const avgDailyProduction = Math.round(totalEggsAllTime / dailyAggregates.length);
+
+    let peak = dailyAggregates[0];
+    dailyAggregates.forEach((d) => {
+      if (d.totalActual > peak.totalActual) {
+        peak = d;
+      }
+    });
+
+    const sumLayingRate = dailyAggregates.reduce((sum, d) => sum + d.avgLayingRate, 0);
+    const overallAvgLayingRate = Math.round((sumLayingRate / dailyAggregates.length) * 10) / 10;
+
+    return {
+      totalDays: dailyAggregates.length,
+      avgDailyProduction,
+      peakDay: peak,
+      latestDay: dailyAggregates[0] || null,
+      overallAvgLayingRate,
+      totalEggsAllTime,
+    };
+  }, [dailyAggregates]);
+
+  // Maximum production among displayed days for relative bar height
+  const maxDisplayedProduction = React.useMemo(() => {
+    if (filteredDailyAggregates.length === 0) return 1;
+    return Math.max(...filteredDailyAggregates.map((d) => d.totalActual), 1);
+  }, [filteredDailyAggregates]);
 
   // Filtered logs for History tab
   const filteredLogs = logs?.filter((log) => {
@@ -1059,84 +1291,678 @@ export const EggProductionLogView: React.FC = () => {
           </div>
         </div>
       ) : (
-        /* History & Previous Logs Table */
-        <div className="p-6 rounded-3xl glass-panel border border-slate-200/80 space-y-4 animate-fadeIn">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-            <h3 className="font-black text-sm text-slate-900">سجل إدخالات الإنتاج السابقة ومراجعتها</h3>
+        /* History & Previous Logs View with Daily Comparison Mode */
+        <div className="space-y-6 animate-fadeIn">
+          {/* 1. Top Control Bar: Mode Switcher, Date Filter & Quick Range */}
+          <div className="p-4 sm:p-5 rounded-3xl glass-panel border border-slate-200/80 shadow-sm flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4">
+            {/* View Sub-Tabs: Comparison vs Detailed Flat Table */}
+            <div className="flex items-center gap-2">
+              <div className="p-1 rounded-2xl bg-white border border-slate-200 flex shadow-sm">
+                <button
+                  onClick={() => setHistorySubTab('comparison')}
+                  className={`px-3 sm:px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                    historySubTab === 'comparison'
+                      ? 'bg-emerald-600 text-white shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <BarChart3 className="w-4 h-4" />
+                  <span>ملخص مقارنة الأيام (موصى به)</span>
+                </button>
+                <button
+                  onClick={() => setHistorySubTab('flat')}
+                  className={`px-3 sm:px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                    historySubTab === 'flat'
+                      ? 'bg-slate-900 text-white shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <FileSpreadsheet className="w-4 h-4" />
+                  <span>كشف تفصيلي مسطح (لكل دور)</span>
+                </button>
+              </div>
+            </div>
 
-            <div className="flex items-center gap-3">
-              <input
-                type="date"
-                value={filterDate}
-                onChange={(e) => setFilterDate(e.target.value)}
-                className="px-3 py-1.5 rounded-xl border border-slate-200 text-xs font-mono"
-              />
-              <button
-                onClick={() => setFilterDate('')}
-                className="text-xs text-slate-500 hover:text-slate-800"
-              >
-                عرض كل التواريخ
-              </button>
+            {/* Quick Filters */}
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Range Filters */}
+              {historySubTab === 'comparison' && !filterDate && (
+                <div className="flex items-center gap-1 bg-slate-100/80 p-1 rounded-xl text-xs">
+                  <button
+                    onClick={() => setHistoryRange('7days')}
+                    className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                      historyRange === '7days'
+                        ? 'bg-white text-emerald-700 shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    آخر 7 أيام
+                  </button>
+                  <button
+                    onClick={() => setHistoryRange('30days')}
+                    className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                      historyRange === '30days'
+                        ? 'bg-white text-emerald-700 shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    آخر 30 يوم
+                  </button>
+                  <button
+                    onClick={() => setHistoryRange('all')}
+                    className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                      historyRange === 'all'
+                        ? 'bg-white text-emerald-700 shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    كل الأيام
+                  </button>
+                </div>
+              )}
+
+              {/* Date Filter Input */}
+              <div className="flex items-center gap-2">
+                <div className="relative">
+                  <Calendar className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="date"
+                    value={filterDate}
+                    onChange={(e) => setFilterDate(e.target.value)}
+                    className="pr-8 pl-3 py-1.5 rounded-xl border border-slate-200 text-xs font-mono font-bold text-slate-800 bg-white focus:border-emerald-500 outline-none shadow-xs"
+                  />
+                </div>
+                {filterDate && (
+                  <button
+                    onClick={() => setFilterDate('')}
+                    className="px-2.5 py-1.5 rounded-xl text-xs font-bold text-slate-600 hover:text-rose-600 hover:bg-rose-50 border border-slate-200 transition-all"
+                  >
+                    عرض كل التواريخ
+                  </button>
+                )}
+              </div>
+
+              {/* Expand / Collapse All for Comparison Mode */}
+              {historySubTab === 'comparison' && filteredDailyAggregates.length > 0 && (
+                <div className="flex items-center gap-1 border-r border-slate-200 pr-2 mr-1">
+                  <button
+                    onClick={expandAllDays}
+                    className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-all text-xs flex items-center gap-1 font-bold"
+                    title="توسيع كل الأيام"
+                  >
+                    <Eye className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">توسيع الكل</span>
+                  </button>
+                  <button
+                    onClick={collapseAllDays}
+                    className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-all text-xs flex items-center gap-1 font-bold"
+                    title="طي كل الأيام"
+                  >
+                    <EyeOff className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">طي الكل</span>
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-right text-xs">
-              <thead>
-                <tr className="bg-slate-50 text-slate-700 font-bold border-b border-slate-200">
-                  <th className="p-3">التاريخ</th>
-                  <th className="p-3">المكان</th>
-                  <th className="p-3 text-center">المجموع الكلي</th>
-                  <th className="p-3 text-center text-rose-600">المكسر</th>
-                  <th className="p-3 text-center text-emerald-700 font-black">الصافي</th>
-                  <th className="p-3 text-center">تقفيص أطباق</th>
-                  <th className="p-3 text-center">نسبة البياض</th>
-                  <th className="p-3">القائم بالجمع</th>
-                  <th className="p-3 text-center">إجراءات</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {filteredLogs && filteredLogs.length > 0 ? (
-                  filteredLogs.map((log) => (
-                    <tr key={log.id} className="hover:bg-slate-50 transition-colors">
-                      <td className="p-3 font-mono font-bold text-slate-900">
-                        {log.collectionDate} <span className="text-[10px] text-slate-400">({log.collectionTime})</span>
-                      </td>
-                      <td className="p-3 font-bold text-slate-800">{log.targetName}</td>
-                      <td className="p-3 text-center font-mono font-bold">{log.actualEggs}</td>
-                      <td className="p-3 text-center font-mono text-rose-600 font-bold">
-                        {log.brokenEggs || 0}
-                      </td>
-                      <td className="p-3 text-center font-mono text-emerald-700 font-black">
-                        {log.marketableEggs || log.actualEggs}
-                      </td>
-                      <td className="p-3 text-center font-mono">
-                        {log.packagedTraysCount ? `${log.packagedTraysCount} طبق (${log.traySize || 18}ب)` : '-'}
-                      </td>
-                      <td className="p-3 text-center font-mono font-bold text-teal-700">
-                        {log.layingRatePercent}%
-                      </td>
-                      <td className="p-3 text-slate-600">{log.recordedBy}</td>
-                      <td className="p-3 text-center">
-                        <button
-                          onClick={() => handleDeleteLog(log.id)}
-                          className="p-1 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan={9} className="p-8 text-center text-slate-400">
-                      لا توجد سجلات إنتاج مسجلة لهذا التاريخ
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+          {/* 2. Top 4 KPI Comparison Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {/* Card 1: Average Daily Production */}
+            <div className="p-4 rounded-3xl bg-white border border-slate-200/80 shadow-xs flex items-center gap-3">
+              <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
+                <Egg className="w-6 h-6 stroke-[2.2]" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-[11px] font-bold text-slate-500">متوسط الإنتاج اليومي</p>
+                <div className="flex items-baseline gap-1 mt-0.5">
+                  <span className="text-xl font-black text-slate-900 font-mono">
+                    {stats.avgDailyProduction.toLocaleString('en-US')}
+                  </span>
+                  <span className="text-[10px] text-slate-500 font-bold">بيضة/يوم</span>
+                </div>
+                <p className="text-[10px] text-slate-400 mt-0.5 truncate">
+                  عبر {stats.totalDays} يوماً مسجلاً في النظام
+                </p>
+              </div>
+            </div>
+
+            {/* Card 2: Peak Production Day */}
+            <div className="p-4 rounded-3xl bg-white border border-slate-200/80 shadow-xs flex items-center gap-3">
+              <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center shrink-0">
+                <Award className="w-6 h-6 stroke-[2.2]" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-[11px] font-bold text-slate-500">أعلى إنتاج يومي (الذروة)</p>
+                <div className="flex items-baseline gap-1 mt-0.5">
+                  <span className="text-xl font-black text-amber-600 font-mono">
+                    {stats.peakDay ? stats.peakDay.totalActual.toLocaleString('en-US') : 0}
+                  </span>
+                  <span className="text-[10px] text-amber-700 font-bold">بيضة</span>
+                </div>
+                <p className="text-[10px] text-slate-500 mt-0.5 truncate font-mono">
+                  {stats.peakDay ? `${getArabicDayDetails(stats.peakDay.date).full}` : 'لا يوجد سجلات'}
+                </p>
+              </div>
+            </div>
+
+            {/* Card 3: Latest Recorded Day & Trend */}
+            <div className="p-4 rounded-3xl bg-white border border-slate-200/80 shadow-xs flex items-center gap-3">
+              <div className="w-12 h-12 rounded-2xl bg-sky-50 text-sky-600 flex items-center justify-center shrink-0">
+                <CalendarDays className="w-6 h-6 stroke-[2.2]" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-[11px] font-bold text-slate-500">آخر يوم مسجل</p>
+                <div className="flex items-baseline gap-1.5 mt-0.5">
+                  <span className="text-xl font-black text-slate-900 font-mono">
+                    {stats.latestDay ? stats.latestDay.totalActual.toLocaleString('en-US') : 0}
+                  </span>
+                  <span className="text-[10px] text-slate-500 font-bold">بيضة</span>
+                  {stats.latestDay?.diffActual !== null && stats.latestDay?.diffActual !== undefined && (
+                    <span
+                      className={`text-[10px] font-black px-1.5 py-0.5 rounded-full flex items-center gap-0.5 ${
+                        stats.latestDay.diffActual > 0
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : stats.latestDay.diffActual < 0
+                          ? 'bg-rose-100 text-rose-800'
+                          : 'bg-slate-100 text-slate-700'
+                      }`}
+                    >
+                      {stats.latestDay.diffActual > 0 ? (
+                        <>
+                          <ArrowUpRight className="w-3 h-3" />
+                          <span>+{stats.latestDay.diffActual}</span>
+                        </>
+                      ) : stats.latestDay.diffActual < 0 ? (
+                        <>
+                          <ArrowDownRight className="w-3 h-3" />
+                          <span>{stats.latestDay.diffActual}</span>
+                        </>
+                      ) : (
+                        <span>= مستقر</span>
+                      )}
+                    </span>
+                  )}
+                </div>
+                <p className="text-[10px] text-slate-400 mt-0.5 truncate font-mono">
+                  {stats.latestDay ? stats.latestDay.date : '-'}
+                </p>
+              </div>
+            </div>
+
+            {/* Card 4: Overall Laying Rate Average */}
+            <div className="p-4 rounded-3xl bg-white border border-slate-200/80 shadow-xs flex items-center gap-3">
+              <div className="w-12 h-12 rounded-2xl bg-teal-50 text-teal-600 flex items-center justify-center shrink-0">
+                <Sparkles className="w-6 h-6 stroke-[2.2]" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-[11px] font-bold text-slate-500">متوسط نسبة البياض العام</p>
+                <div className="flex items-baseline gap-1 mt-0.5">
+                  <span className="text-xl font-black text-teal-700 font-mono">
+                    {stats.overallAvgLayingRate}%
+                  </span>
+                  <span
+                    className={`text-[9px] font-extrabold px-1.5 py-0.2 rounded-full mr-1 ${
+                      stats.overallAvgLayingRate >= 70
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : stats.overallAvgLayingRate >= 50
+                        ? 'bg-amber-100 text-amber-800'
+                        : 'bg-rose-100 text-rose-800'
+                    }`}
+                  >
+                    {stats.overallAvgLayingRate >= 70
+                      ? 'إنتاج ممتاز'
+                      : stats.overallAvgLayingRate >= 50
+                      ? 'إنتاج متوسط'
+                      : 'يحتاج متابعة'}
+                  </span>
+                </div>
+                <p className="text-[10px] text-slate-400 mt-0.5 truncate">
+                  إجمالي البيض الكلي: {stats.totalEggsAllTime.toLocaleString('en-US')} بيضة
+                </p>
+              </div>
+            </div>
           </div>
+
+          {/* 3. Visual Mini-Chart: Daily Production Progression Bars */}
+          {historySubTab === 'comparison' && filteredDailyAggregates.length > 1 && (
+            <div className="p-5 rounded-3xl glass-panel border border-slate-200/80 shadow-xs space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <TrendingUp className="w-4 h-4 text-emerald-600" />
+                  <h4 className="text-xs font-black text-slate-900">
+                    مقارنة حركة الإنتاج اليومي بالرسم البياني
+                  </h4>
+                  <span className="text-[10px] text-slate-400 font-bold">
+                    (عرض {Math.min(filteredDailyAggregates.length, 14)} يوماً)
+                  </span>
+                </div>
+                <span className="text-[10px] font-bold text-slate-400">
+                  الأعلى إنتاجاً مميز بالتاج 👑
+                </span>
+              </div>
+
+              {/* Bars container (reversed so earlier dates are on the right/left naturally) */}
+              <div className="flex items-end gap-2 sm:gap-3 h-32 pt-4 px-2 overflow-x-auto pb-1 border-b border-slate-100">
+                {[...filteredDailyAggregates.slice(0, 14)].reverse().map((day) => {
+                  const isPeak = stats.peakDay?.date === day.date;
+                  const dayDetails = getArabicDayDetails(day.date);
+                  const heightPercent = Math.max(
+                    15,
+                    Math.round((day.totalActual / maxDisplayedProduction) * 100)
+                  );
+
+                  return (
+                    <div
+                      key={`bar-${day.date}`}
+                      onClick={() => toggleDayExpanded(day.date)}
+                      className="flex-1 min-w-[50px] max-w-[80px] flex flex-col items-center gap-1 group cursor-pointer"
+                      title={`يوم ${day.date}: ${day.totalActual} بيضة (نسبة بياض ${day.avgLayingRate}%)`}
+                    >
+                      {/* Bar Value on top */}
+                      <span className="text-[10px] font-mono font-black text-slate-700 group-hover:text-emerald-700 transition-colors">
+                        {day.totalActual}
+                      </span>
+
+                      {/* The Bar */}
+                      <div className="w-full bg-slate-100 rounded-t-xl overflow-hidden flex flex-col justify-end h-20 p-0.5">
+                        <div
+                          style={{ height: `${heightPercent}%` }}
+                          className={`w-full rounded-t-lg transition-all duration-300 relative flex items-center justify-center ${
+                            isPeak
+                              ? 'bg-gradient-to-t from-amber-500 to-amber-400 shadow-xs'
+                              : 'bg-gradient-to-t from-emerald-600 to-emerald-400 group-hover:from-emerald-700 group-hover:to-emerald-500'
+                          }`}
+                        >
+                          {isPeak && (
+                            <span className="absolute -top-3 text-[10px] leading-none">👑</span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Day Label */}
+                      <span className="text-[9px] font-bold text-slate-600 truncate text-center w-full">
+                        {dayDetails.dayName}
+                      </span>
+                      <span className="text-[8px] font-mono text-slate-400">
+                        {day.date.slice(5)}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* 4. Comparison Summary Table (Mode: Comparison) */}
+          {historySubTab === 'comparison' ? (
+            <div className="p-5 rounded-3xl glass-panel border border-slate-200/80 shadow-xs space-y-4">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <BarChart3 className="w-4 h-4 text-emerald-600" />
+                  <h3 className="font-black text-sm text-slate-900">
+                    جدول مقارنة الأيام السابقة ومتابعة التطور اليومي
+                  </h3>
+                  <span className="text-xs px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-bold border border-emerald-200/60">
+                    {filteredDailyAggregates.length} يوماً مسجلاً
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400">
+                  اضغط على زر (التفاصيل) في أي يوم لعرض تفاصيل كل بطارية ودور وغرفة.
+                </p>
+              </div>
+
+              {filteredDailyAggregates.length > 0 ? (
+                <div className="space-y-3">
+                  {filteredDailyAggregates.map((day) => {
+                    const isExpanded = !!expandedDays[day.date];
+                    const dayDetails = getArabicDayDetails(day.date);
+                    const isPeak = stats.peakDay?.date === day.date;
+
+                    return (
+                      <div
+                        key={day.date}
+                        className={`rounded-2xl border transition-all ${
+                          isExpanded
+                            ? 'bg-white border-emerald-300 shadow-md ring-2 ring-emerald-500/10'
+                            : 'bg-white hover:bg-slate-50/80 border-slate-200 shadow-xs'
+                        }`}
+                      >
+                        {/* Daily Summary Row Header */}
+                        <div className="p-3.5 sm:p-4 flex flex-wrap items-center justify-between gap-3">
+                          {/* Date and Badges */}
+                          <div className="flex items-center gap-3 min-w-[180px]">
+                            <button
+                              onClick={() => toggleDayExpanded(day.date)}
+                              className={`p-1.5 rounded-xl transition-all ${
+                                isExpanded
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                              }`}
+                              title={isExpanded ? 'طي التفاصيل' : 'عرض التفاصيل'}
+                            >
+                              {isExpanded ? (
+                                <ChevronUp className="w-4 h-4 stroke-[2.5]" />
+                              ) : (
+                                <ChevronDown className="w-4 h-4 stroke-[2.5]" />
+                              )}
+                            </button>
+
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs font-black text-slate-900">
+                                  {dayDetails.dayName}
+                                </span>
+                                <span className="font-mono text-xs font-bold text-slate-500">
+                                  {day.date}
+                                </span>
+                                {dayDetails.badge && (
+                                  <span className="text-[10px] font-extrabold px-1.5 py-0.2 rounded-md bg-sky-100 text-sky-800">
+                                    {dayDetails.badge}
+                                  </span>
+                                )}
+                                {isPeak && (
+                                  <span className="text-[10px] font-extrabold px-1.5 py-0.2 rounded-md bg-amber-100 text-amber-800 flex items-center gap-0.5">
+                                    👑 الذروة
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[10px] text-slate-400 mt-0.5">
+                                {day.entriesCount} أقسام مسجلة • جمع الساعة ({day.primaryTime})
+                              </p>
+                            </div>
+                          </div>
+
+                          {/* Quick Metrics Columns */}
+                          <div className="flex flex-wrap items-center gap-4 sm:gap-6">
+                            {/* Gross Production Total */}
+                            <div className="text-center min-w-[70px]">
+                              <p className="text-[10px] font-bold text-slate-400">إجمالي الإنتاج</p>
+                              <div className="flex items-baseline justify-center gap-1">
+                                <span className="text-base font-black text-slate-900 font-mono">
+                                  {day.totalActual}
+                                </span>
+                                <span className="text-[9px] font-bold text-slate-500">بيضة</span>
+                              </div>
+                            </div>
+
+                            {/* Comparison Indicator vs Previous Day */}
+                            <div className="text-center min-w-[105px]">
+                              <p className="text-[10px] font-bold text-slate-400">مقارنة بسابقه</p>
+                              <div className="mt-0.5 flex justify-center">
+                                {day.diffActual !== null && day.diffActual !== undefined ? (
+                                  day.diffActual > 0 ? (
+                                    <span className="inline-flex items-center gap-1 text-[11px] font-black px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                      <TrendingUp className="w-3.5 h-3.5 stroke-[2.5]" />
+                                      <span>+{day.diffActual} (+{day.pctChange}%)</span>
+                                    </span>
+                                  ) : day.diffActual < 0 ? (
+                                    <span className="inline-flex items-center gap-1 text-[11px] font-black px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200">
+                                      <TrendingDown className="w-3.5 h-3.5 stroke-[2.5]" />
+                                      <span>{day.diffActual} ({day.pctChange}%)</span>
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center gap-1 text-[11px] font-black px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
+                                      <Minus className="w-3.5 h-3.5" />
+                                      <span>مستقر (0)</span>
+                                    </span>
+                                  )
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-50 text-sky-700">
+                                    نقطة البداية
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Net Marketable */}
+                            <div className="text-center min-w-[65px]">
+                              <p className="text-[10px] font-bold text-emerald-700">الصافي السليم</p>
+                              <span className="text-sm font-black text-emerald-700 font-mono">
+                                {day.totalMarketable}
+                              </span>
+                            </div>
+
+                            {/* Broken Eggs */}
+                            <div className="text-center min-w-[50px]">
+                              <p className="text-[10px] font-bold text-rose-600">المكسر</p>
+                              <span
+                                className={`text-sm font-black font-mono ${
+                                  day.totalBroken > 0 ? 'text-rose-600' : 'text-slate-300'
+                                }`}
+                              >
+                                {day.totalBroken}
+                              </span>
+                            </div>
+
+                            {/* Trays & Loose Packaging */}
+                            <div className="text-center min-w-[100px]">
+                              <p className="text-[10px] font-bold text-slate-400">التعبئة والتوريد</p>
+                              <div className="text-xs font-bold text-slate-700 font-mono">
+                                <span>{day.totalPackagedTrays} طبق</span>
+                                {day.looseEggs > 0 && (
+                                  <span className="text-[10px] text-amber-700 mr-1">
+                                    + {day.looseEggs} مفرد
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Laying Rate % */}
+                            <div className="text-center min-w-[80px]">
+                              <p className="text-[10px] font-bold text-slate-400">نسبة البياض</p>
+                              <div className="flex items-center justify-center gap-1">
+                                <span className="text-sm font-black text-teal-700 font-mono">
+                                  {day.avgLayingRate}%
+                                </span>
+                                {day.diffLayingRate !== null && day.diffLayingRate !== undefined && day.diffLayingRate !== 0 && (
+                                  <span
+                                    className={`text-[9px] font-bold font-mono ${
+                                      day.diffLayingRate > 0 ? 'text-emerald-600' : 'text-rose-500'
+                                    }`}
+                                  >
+                                    {day.diffLayingRate > 0 ? `+${day.diffLayingRate}%` : `${day.diffLayingRate}%`}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Row Actions */}
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => toggleDayExpanded(day.date)}
+                              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1 ${
+                                isExpanded
+                                  ? 'bg-emerald-600 text-white shadow-xs'
+                                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                              }`}
+                            >
+                              <span>{isExpanded ? 'إخفاء التفاصيل' : 'عرض التفاصيل'}</span>
+                              {isExpanded ? (
+                                <ChevronUp className="w-3.5 h-3.5" />
+                              ) : (
+                                <ChevronDown className="w-3.5 h-3.5" />
+                              )}
+                            </button>
+
+                            <button
+                              onClick={() => handleDeleteDay(day.date)}
+                              className="p-1.5 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-all"
+                              title={`حذف سجلات يوم ${day.date} بالكامل`}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Expandable Accordion: Details of each Battery/Tier and Room */}
+                        {isExpanded && (
+                          <div className="p-4 border-t border-slate-200/80 bg-slate-50/70 rounded-b-2xl animate-fadeIn space-y-3">
+                            <div className="flex flex-wrap items-center justify-between text-xs text-slate-500 pb-2 border-b border-slate-200/60">
+                              <div className="flex items-center gap-4">
+                                <span>القائم بالجمع: <strong className="text-slate-800">{day.primaryCollector}</strong></span>
+                                <span>وقت الجمع المسائي: <strong className="text-slate-800">{day.primaryTime}</strong></span>
+                                <span>سعة الطبق: <strong className="text-slate-800">{day.traySize} بيضة</strong></span>
+                              </div>
+                              <span className="text-[11px] text-slate-400">
+                                كشف مفصل للبطاريات والغرف المسجلة في هذا اليوم
+                              </span>
+                            </div>
+
+                            <div className="overflow-x-auto rounded-xl border border-slate-200/80 bg-white">
+                              <table className="w-full text-right text-xs">
+                                <thead>
+                                  <tr className="bg-slate-100/80 text-slate-700 font-bold border-b border-slate-200">
+                                    <th className="p-2.5">المكان (البطارية / الدور / الغرفة)</th>
+                                    <th className="p-2.5 text-center">المجموع الكلي</th>
+                                    <th className="p-2.5 text-center text-rose-600">المكسر</th>
+                                    <th className="p-2.5 text-center text-emerald-700 font-black">الصافي</th>
+                                    <th className="p-2.5 text-center">تقفيص أطباق</th>
+                                    <th className="p-2.5 text-center">نسبة البياض</th>
+                                    <th className="p-2.5 text-center">حذف الدور</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                  {day.records.map((rec) => (
+                                    <tr key={rec.id} className="hover:bg-slate-50 transition-colors">
+                                      <td className="p-2.5 font-bold text-slate-800 flex items-center gap-2">
+                                        <Layers className="w-3.5 h-3.5 text-emerald-600" />
+                                        <span>{rec.targetName}</span>
+                                      </td>
+                                      <td className="p-2.5 text-center font-mono font-bold text-slate-900">
+                                        {rec.actualEggs}
+                                      </td>
+                                      <td className="p-2.5 text-center font-mono text-rose-600 font-bold">
+                                        {rec.brokenEggs || 0}
+                                      </td>
+                                      <td className="p-2.5 text-center font-mono text-emerald-700 font-black">
+                                        {rec.marketableEggs || rec.actualEggs}
+                                      </td>
+                                      <td className="p-2.5 text-center font-mono text-slate-600">
+                                        {rec.packagedTraysCount
+                                          ? `${rec.packagedTraysCount} طبق (${rec.traySize || 18}ب)`
+                                          : '-'}
+                                      </td>
+                                      <td className="p-2.5 text-center font-mono font-bold text-teal-700">
+                                        {rec.layingRatePercent}%
+                                      </td>
+                                      <td className="p-2.5 text-center">
+                                        <button
+                                          onClick={() => handleDeleteLog(rec.id)}
+                                          className="p-1 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50"
+                                          title="حذف هذا الدور فقط"
+                                        >
+                                          <Trash2 className="w-3.5 h-3.5" />
+                                        </button>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="p-12 text-center rounded-2xl bg-slate-50 border border-dashed border-slate-200">
+                  <History className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                  <p className="text-sm font-bold text-slate-500">لا توجد سجلات إنتاج مسجلة لهذا التاريخ أو النطاق</p>
+                  <p className="text-xs text-slate-400 mt-1">
+                    قم بإدخال وحفظ إنتاج اليوم من خلال جدول الإدخال اليومي (الدفتر)
+                  </p>
+                </div>
+              )}
+            </div>
+          ) : (
+            /* 5. Flat Detailed Table (Mode: Flat View) */
+            <div className="p-6 rounded-3xl glass-panel border border-slate-200/80 space-y-4">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div>
+                  <h3 className="font-black text-sm text-slate-900">الكشف التفصيلي المسطح لجميع الأدوار</h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    عرض تفصيلي مسطح لكل قفص ودور وغرفة على حدة
+                  </p>
+                </div>
+
+                {/* Filter Target */}
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-slate-500">تصفية حسب:</span>
+                  <select
+                    value={filterTarget}
+                    onChange={(e) => setFilterTarget(e.target.value)}
+                    className="px-3 py-1.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-800 bg-white outline-none"
+                  >
+                    <option value="all">كل الأماكن</option>
+                    <option value="tiers">أدوار البطاريات فقط</option>
+                    <option value="rooms">الغرف الأرضية فقط</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-right text-xs">
+                  <thead>
+                    <tr className="bg-slate-50 text-slate-700 font-bold border-b border-slate-200">
+                      <th className="p-3">التاريخ</th>
+                      <th className="p-3">المكان</th>
+                      <th className="p-3 text-center">المجموع الكلي</th>
+                      <th className="p-3 text-center text-rose-600">المكسر</th>
+                      <th className="p-3 text-center text-emerald-700 font-black">الصافي</th>
+                      <th className="p-3 text-center">تقفيص أطباق</th>
+                      <th className="p-3 text-center">نسبة البياض</th>
+                      <th className="p-3">القائم بالجمع</th>
+                      <th className="p-3 text-center">إجراءات</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {filteredLogs && filteredLogs.length > 0 ? (
+                      filteredLogs.map((log) => (
+                        <tr key={log.id} className="hover:bg-slate-50 transition-colors">
+                          <td className="p-3 font-mono font-bold text-slate-900">
+                            {log.collectionDate} <span className="text-[10px] text-slate-400">({log.collectionTime})</span>
+                          </td>
+                          <td className="p-3 font-bold text-slate-800">{log.targetName}</td>
+                          <td className="p-3 text-center font-mono font-bold">{log.actualEggs}</td>
+                          <td className="p-3 text-center font-mono text-rose-600 font-bold">
+                            {log.brokenEggs || 0}
+                          </td>
+                          <td className="p-3 text-center font-mono text-emerald-700 font-black">
+                            {log.marketableEggs || log.actualEggs}
+                          </td>
+                          <td className="p-3 text-center font-mono">
+                            {log.packagedTraysCount ? `${log.packagedTraysCount} طبق (${log.traySize || 18}ب)` : '-'}
+                          </td>
+                          <td className="p-3 text-center font-mono font-bold text-teal-700">
+                            {log.layingRatePercent}%
+                          </td>
+                          <td className="p-3 text-slate-600">{log.recordedBy}</td>
+                          <td className="p-3 text-center">
+                            <button
+                              onClick={() => handleDeleteLog(log.id)}
+                              className="p-1 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50"
+                              title="حذف هذا السجل"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td colSpan={9} className="p-8 text-center text-slate-400">
+                          لا توجد سجلات إنتاج مسجلة لهذا التاريخ
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
