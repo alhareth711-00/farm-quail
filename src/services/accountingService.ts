@@ -6,6 +6,8 @@ import type {
   OrderInvoice,
   ExpenseRecord,
   ReceiptVoucher,
+  Customer,
+  YearEndClosingRecord,
 } from '../types';
 
 /**
@@ -878,3 +880,604 @@ export async function getTrialBalance(): Promise<{
     difference,
   };
 }
+
+// =========================================================================
+// 7. كشف الحساب (Ledger Statements: Accounts & Customers)
+// =========================================================================
+
+export interface LedgerTransaction {
+  id: string;
+  date: string;
+  time?: string;
+  referenceType: string;
+  referenceNumber?: string;
+  manualInvoiceNumber?: string;
+  description: string;
+  partyName?: string;
+  debit: number;
+  credit: number;
+  runningBalance: number;
+}
+
+export interface AccountLedgerReport {
+  account: Account;
+  startDate?: string;
+  endDate?: string;
+  openingBalance: number;
+  transactions: LedgerTransaction[];
+  totalDebit: number;
+  totalCredit: number;
+  netMovement: number;
+  endingBalance: number;
+}
+
+/**
+ * استخراج كشف حساب مالي تفصيلي لحساب من شجرة الحسابات (الصندوق، البنك، الذمم...)
+ */
+export async function getAccountLedger(
+  accountIdOrCode: string,
+  startDate?: string,
+  endDate?: string
+): Promise<AccountLedgerReport> {
+  await initializeChartOfAccounts();
+
+  // Find account
+  const account = await db.accounts
+    .filter((a) => a.id === accountIdOrCode || a.code === accountIdOrCode)
+    .first();
+
+  if (!account) {
+    throw new Error(`الحساب المالي (${accountIdOrCode}) غير موجود في شجرة الحسابات.`);
+  }
+
+  // Fetch all journal entries ordered chronologically
+  const entries = await db.journalEntries.orderBy('date').toArray();
+  entries.sort((a, b) => {
+    const timeA = `${a.date} ${a.time || '00:00'}`;
+    const timeB = `${b.date} ${b.time || '00:00'}`;
+    return timeA.localeCompare(timeB);
+  });
+
+  let openingBalance = 0;
+  let runningBalance = 0;
+  let totalDebit = 0;
+  let totalCredit = 0;
+  const transactions: LedgerTransaction[] = [];
+
+  for (const entry of entries) {
+    // Find matching line in this entry
+    const matchedLine = entry.lines.find(
+      (l) => l.accountId === account.id || l.accountCode === account.code
+    );
+
+    if (!matchedLine) continue;
+
+    const debit = Number(matchedLine.debit) || 0;
+    const credit = Number(matchedLine.credit) || 0;
+
+    // In double-entry:
+    // Debit accounts: debit adds, credit subtracts
+    // Credit accounts: credit adds, debit subtracts
+    const delta =
+      account.normalBalance === 'debit' ? debit - credit : credit - debit;
+
+    // Check if entry is before startDate
+    if (startDate && entry.date < startDate) {
+      openingBalance += delta;
+      continue;
+    }
+
+    // Check if entry is after endDate
+    if (endDate && entry.date > endDate) {
+      continue;
+    }
+
+    // If starting calculation for the filtered period
+    if (transactions.length === 0) {
+      runningBalance = openingBalance;
+    }
+
+    runningBalance += delta;
+    totalDebit += debit;
+    totalCredit += credit;
+
+    transactions.push({
+      id: `${entry.id}-${matchedLine.id || Math.random()}`,
+      date: entry.date,
+      time: entry.time,
+      referenceType: entry.referenceType,
+      referenceNumber: entry.referenceNumber || entry.entryNumber,
+      manualInvoiceNumber: entry.manualInvoiceNumber,
+      description: matchedLine.description || entry.description,
+      partyName: matchedLine.partyName,
+      debit,
+      credit,
+      runningBalance,
+    });
+  }
+
+  // If no transactions in period, runningBalance equals openingBalance
+  if (transactions.length === 0) {
+    runningBalance = openingBalance;
+  }
+
+  return {
+    account,
+    startDate,
+    endDate,
+    openingBalance,
+    transactions,
+    totalDebit,
+    totalCredit,
+    netMovement: account.normalBalance === 'debit' ? totalDebit - totalCredit : totalCredit - totalDebit,
+    endingBalance: runningBalance,
+  };
+}
+
+export interface CustomerLedgerReport {
+  customer: Customer;
+  startDate?: string;
+  endDate?: string;
+  openingBalance: number;
+  transactions: LedgerTransaction[];
+  totalDebit: number; // إجمالي الفواتير والمستحقات (تزيد الدين)
+  totalCredit: number; // إجمالي المدفوعات وسندات القبض (تخفض الدين)
+  netMovement: number;
+  endingBalance: number; // الرصيد النهائي المستحق على العميل
+}
+
+/**
+ * استخراج كشف حساب عميل معتمد يوضح المبيعات وسندات القبض والرصيد النهائي
+ */
+export async function getCustomerLedger(
+  customerId: string,
+  startDate?: string,
+  endDate?: string
+): Promise<CustomerLedgerReport> {
+  const customer = await db.customers.get(customerId);
+  if (!customer) {
+    throw new Error('العميل المحدد غير موجود في قاعدة البيانات.');
+  }
+
+  // Invoices for this customer
+  const customerInvoices = await db.invoices
+    .where('customerId')
+    .equals(customerId)
+    .sortBy('date');
+
+  // Receipt Vouchers for this customer
+  const customerVouchers = await db.receiptVouchers
+    .where('customerId')
+    .equals(customerId)
+    .sortBy('date');
+
+  // Combine into unified chronological ledger items
+  type RawCustomerMovement = {
+    date: string;
+    time?: string;
+    type: 'invoice' | 'voucher';
+    refNum: string;
+    manualRef?: string;
+    description: string;
+    debit: number; // charges to customer (invoices)
+    credit: number; // payments by customer (vouchers / cash at POS)
+  };
+
+  const rawMovements: RawCustomerMovement[] = [];
+
+  // 1. Process invoices
+  for (const inv of customerInvoices) {
+    const total = Number(inv.totalAmount) || 0;
+    const paid = Number(inv.paidAmount) || 0;
+
+    // If customer paid part or all at checkout, record total as debit and cash paid as immediate credit
+    rawMovements.push({
+      date: inv.date,
+      time: inv.time,
+      type: 'invoice',
+      refNum: inv.invoiceNumber,
+      manualRef: inv.manualInvoiceNumber,
+      description: `فاتورة مبيعات (${inv.items.map((i) => i.productName).join('، ')})`,
+      debit: total,
+      credit: paid,
+    });
+  }
+
+  // 2. Process receipt vouchers (subsequent debt payments)
+  for (const v of customerVouchers) {
+    rawMovements.push({
+      date: v.date,
+      time: '12:00',
+      type: 'voucher',
+      refNum: v.voucherNumber,
+      description: `سند قبض نقدي / محفظة: ${v.notes || 'سداد دفعة من الحساب الآجل'}`,
+      debit: 0,
+      credit: Number(v.amount) || 0,
+    });
+  }
+
+  // Sort movements chronologically
+  rawMovements.sort((a, b) => {
+    const timeA = `${a.date} ${a.time || '00:00'}`;
+    const timeB = `${b.date} ${b.time || '00:00'}`;
+    return timeA.localeCompare(timeB);
+  });
+
+  let openingBalance = 0;
+  let runningBalance = 0;
+  let totalDebit = 0;
+  let totalCredit = 0;
+  const transactions: LedgerTransaction[] = [];
+
+  for (const mov of rawMovements) {
+    const delta = mov.debit - mov.credit;
+
+    if (startDate && mov.date < startDate) {
+      openingBalance += delta;
+      continue;
+    }
+
+    if (endDate && mov.date > endDate) {
+      continue;
+    }
+
+    if (transactions.length === 0) {
+      runningBalance = openingBalance;
+    }
+
+    runningBalance += delta;
+    totalDebit += mov.debit;
+    totalCredit += mov.credit;
+
+    transactions.push({
+      id: `${mov.type}-${mov.refNum}`,
+      date: mov.date,
+      time: mov.time,
+      referenceType: mov.type === 'invoice' ? 'فاتورة مبيعات' : 'سند قبض',
+      referenceNumber: mov.refNum,
+      manualInvoiceNumber: mov.manualRef,
+      description: mov.description,
+      partyName: customer.name,
+      debit: mov.debit,
+      credit: mov.credit,
+      runningBalance,
+    });
+  }
+
+  if (transactions.length === 0) {
+    runningBalance = openingBalance;
+  }
+
+  return {
+    customer,
+    startDate,
+    endDate,
+    openingBalance,
+    transactions,
+    totalDebit,
+    totalCredit,
+    netMovement: totalDebit - totalCredit,
+    endingBalance: runningBalance,
+  };
+}
+
+// =========================================================================
+// 8. قائمة الدخل (Income Statement / P&L)
+// =========================================================================
+
+export interface IncomeStatementLine {
+  code: string;
+  name: string;
+  amount: number;
+}
+
+export interface IncomeStatementReport {
+  startDate: string;
+  endDate: string;
+  periodLabel: string;
+  revenues: IncomeStatementLine[];
+  totalRevenues: number;
+  salesDiscounts: number;
+  netRevenues: number;
+  cogsItems: IncomeStatementLine[];
+  totalCogs: number;
+  grossProfit: number;
+  grossMarginPct: number;
+  operatingExpenses: IncomeStatementLine[];
+  totalOperatingExpenses: number;
+  netIncome: number;
+  netMarginPct: number;
+}
+
+/**
+ * حساب وتوليد قائمة الدخل لحساب صافي الربح خلال فترة يحددها المستخدم
+ */
+export async function getIncomeStatementReport(
+  startDate: string,
+  endDate: string
+): Promise<IncomeStatementReport> {
+  // Fetch invoices in date range
+  const periodInvoices = await db.invoices
+    .filter((inv) => inv.date >= startDate && inv.date <= endDate)
+    .toArray();
+
+  // Fetch expenses in date range
+  const periodExpenses = await db.expenses
+    .filter((e) => e.date >= startDate && e.date <= endDate)
+    .toArray();
+
+  // 1. Revenues Breakdown
+  let eggSales = 0;
+  let meatSales = 0;
+  let generalSales = 0;
+  let deliveryRevenues = 0;
+  let salesDiscounts = 0;
+  let calculatedCogs = 0;
+
+  for (const inv of periodInvoices) {
+    deliveryRevenues += Number(inv.deliveryFee) || 0;
+    salesDiscounts += Number(inv.discount) || 0;
+    calculatedCogs += Number(inv.totalCost) || 0;
+
+    for (const item of inv.items) {
+      const itemTotal = Number(item.total) || 0;
+      const lowerName = item.productName.toLowerCase();
+      if (lowerName.includes('بيض') || lowerName.includes('طبق')) {
+        eggSales += itemTotal;
+      } else if (lowerName.includes('سمان') || lowerName.includes('لحم') || lowerName.includes('حي') || lowerName.includes('مذبوح')) {
+        meatSales += itemTotal;
+      } else {
+        generalSales += itemTotal;
+      }
+    }
+  }
+
+  const revenues: IncomeStatementLine[] = [
+    { code: '40101', name: 'إيرادات مبيعات بيض المائدة والمخصب', amount: eggSales },
+    { code: '40103', name: 'إيرادات مبيعات سمان اللحم والطيور الحية', amount: meatSales },
+  ];
+  if (generalSales > 0) {
+    revenues.push({ code: '40104', name: 'إيرادات مبيعات المتجر ونقاط البيع', amount: generalSales });
+  }
+  if (deliveryRevenues > 0) {
+    revenues.push({ code: '40201', name: 'إيرادات خدمات التوصيل والنقل', amount: deliveryRevenues });
+  }
+
+  const grossRevenues = eggSales + meatSales + generalSales + deliveryRevenues;
+  const netRevenues = Math.max(0, grossRevenues - salesDiscounts);
+
+  // 2. Cost of Goods Sold (COGS)
+  const cogsItems: IncomeStatementLine[] = [];
+  if (calculatedCogs > 0) {
+    cogsItems.push({
+      code: '50000',
+      name: 'تكلفة البضاعة المباعة التقديرية (COGS)',
+      amount: calculatedCogs,
+    });
+  }
+
+  const totalCogs = calculatedCogs;
+  const grossProfit = netRevenues - totalCogs;
+  const grossMarginPct = netRevenues > 0 ? Math.round((grossProfit / netRevenues) * 100) : 0;
+
+  // 3. Operating Expenses Breakdown
+  const expensesByCategory: Record<string, number> = {};
+  for (const exp of periodExpenses) {
+    const cat = exp.category || 'other';
+    expensesByCategory[cat] = (expensesByCategory[cat] || 0) + (Number(exp.amount) || 0);
+  }
+
+  const categoryNames: Record<string, { code: string; name: string }> = {
+    feed_purchase: { code: '50101', name: 'مصروفات شراء واستخدام الأعلاف' },
+    medications_vitamins: { code: '50102', name: 'مصروفات الأدوية واللقاحات البيطرية' },
+    delivery_petrol: { code: '50103', name: 'مصروفات المحروقات وبترول التوصيل' },
+    salaries_advances: { code: '50104', name: 'مصروفات رواتب وأجور وسلفيات العمال' },
+    utilities_maintenance: { code: '50105', name: 'مصروفات صيانة العنابر والأقفاص والمعدات' },
+    electricity_water: { code: '50106', name: 'مصروفات كهرباء ومياه وتشغيل' },
+    packaging_bedding: { code: '50108', name: 'مصروفات نشارة الخشب والأطباق وكراتين التعبئة' },
+    other: { code: '50107', name: 'مصروفات إدارية ونثريات عامة' },
+  };
+
+  const operatingExpenses: IncomeStatementLine[] = Object.entries(expensesByCategory).map(
+    ([catKey, amt]) => {
+      const meta = categoryNames[catKey] || { code: '50107', name: catKey };
+      return {
+        code: meta.code,
+        name: meta.name,
+        amount: amt,
+      };
+    }
+  );
+
+  const totalOperatingExpenses = operatingExpenses.reduce((sum, item) => sum + item.amount, 0);
+  const netIncome = grossProfit - totalOperatingExpenses;
+  const netMarginPct = netRevenues > 0 ? Math.round((netIncome / netRevenues) * 100) : 0;
+
+  return {
+    startDate,
+    endDate,
+    periodLabel: `من ${startDate} إلى ${endDate}`,
+    revenues,
+    totalRevenues: grossRevenues,
+    salesDiscounts,
+    netRevenues,
+    cogsItems,
+    totalCogs,
+    grossProfit,
+    grossMarginPct,
+    operatingExpenses,
+    totalOperatingExpenses,
+    netIncome,
+    netMarginPct,
+  };
+}
+
+// =========================================================================
+// 9. دورة الإقفال السنوي المحاسبية (Year-End Closing)
+// =========================================================================
+
+/**
+ * تنفيذ عملية الإقفال السنوي وإقفال حسابات الإيرادات والمصروفات
+ * وترحيل صافي الربح / الخسارة إلى حساب "الأرباح المحتجزة / المدورة" (30201)
+ */
+export async function performYearEndClosing(options: {
+  fiscalYear: number;
+  closingDate: string;
+  closedBy: string;
+  notes?: string;
+}): Promise<{
+  closingEntry: JournalEntry;
+  auditRecord: YearEndClosingRecord;
+  netIncome: number;
+}> {
+  const { fiscalYear, closingDate, closedBy, notes } = options;
+
+  await initializeChartOfAccounts();
+
+  // 1. Verify if year is already closed
+  const existingClosingsSetting = await db.settings.get('fiscal_year_closings');
+  const closingsList: YearEndClosingRecord[] = existingClosingsSetting?.value || [];
+
+  const alreadyClosed = closingsList.some((c) => c.fiscalYear === fiscalYear);
+  if (alreadyClosed) {
+    throw new Error(`السنة المالية (${fiscalYear}) تم إقفالها مسبقاً ولا يمكن تكرار إقفال نفس السنة!`);
+  }
+
+  // 2. Fetch all accounts
+  const allAccounts = await db.accounts.toArray();
+
+  // Filter revenue & expense accounts that have active balances
+  const revenueAccounts = allAccounts.filter(
+    (a) => a.type === 'revenue' && Math.abs(a.currentBalance) > 0.001
+  );
+  const expenseAccounts = allAccounts.filter(
+    (a) => a.type === 'expense' && Math.abs(a.currentBalance) > 0.001
+  );
+
+  if (revenueAccounts.length === 0 && expenseAccounts.length === 0) {
+    throw new Error('لا توجد أرصدة إيرادات أو مصروفات حالية لإقفالها. كافة الحسابات الاسمية مصفّرة بالفعل.');
+  }
+
+  // Find Retained Earnings Account
+  const retainedAccount = allAccounts.find((a) => a.code === '30201' || a.id === 'acc-30201');
+  if (!retainedAccount) {
+    throw new Error('حساب الأرباح المحتجزة (30201) غير موجود في شجرة الحسابات.');
+  }
+
+  const retainedEarningsBefore = retainedAccount.currentBalance;
+
+  // 3. Compute totals
+  let totalRevenues = 0;
+  let totalExpenses = 0;
+
+  const lines: Omit<JournalEntryLine, 'id'>[] = [];
+
+  // Close Revenue Accounts:
+  // Revenue accounts have credit balances -> Debit them to bring to zero
+  for (const rev of revenueAccounts) {
+    const bal = Math.abs(rev.currentBalance);
+    totalRevenues += bal;
+    lines.push({
+      accountId: rev.id,
+      accountCode: rev.code,
+      accountName: rev.name,
+      debit: bal,
+      credit: 0,
+      description: `إقفال حساب ${rev.name} وتصفيره للسنة المالية ${fiscalYear}`,
+    });
+  }
+
+  // Close Expense Accounts:
+  // Expense accounts have debit balances -> Credit them to bring to zero
+  for (const exp of expenseAccounts) {
+    const bal = Math.abs(exp.currentBalance);
+    totalExpenses += bal;
+    lines.push({
+      accountId: exp.id,
+      accountCode: exp.code,
+      accountName: exp.name,
+      debit: 0,
+      credit: bal,
+      description: `إقفال حساب ${exp.name} وتصفيره للسنة المالية ${fiscalYear}`,
+    });
+  }
+
+  // Net Income = Revenues - Expenses
+  const netIncome = totalRevenues - totalExpenses;
+
+  // Transfer to Retained Earnings (Equity):
+  if (netIncome > 0) {
+    // Net Profit -> Credit Retained Earnings (increases equity)
+    lines.push({
+      accountId: retainedAccount.id,
+      accountCode: retainedAccount.code,
+      accountName: retainedAccount.name,
+      debit: 0,
+      credit: netIncome,
+      description: `ترحيل صافي أرباح السنة المالية ${fiscalYear} إلى الأرباح المحتجزة`,
+    });
+  } else if (netIncome < 0) {
+    // Net Loss -> Debit Retained Earnings (decreases equity)
+    const lossAmount = Math.abs(netIncome);
+    lines.push({
+      accountId: retainedAccount.id,
+      accountCode: retainedAccount.code,
+      accountName: retainedAccount.name,
+      debit: lossAmount,
+      credit: 0,
+      description: `ترحيل صافي خسائر السنة المالية ${fiscalYear} وتخفيض الأرباح المحتجزة`,
+    });
+  }
+
+  // 4. Create and post closing journal entry (Strictly balanced double-entry)
+  const closingEntry = await createJournalEntry({
+    date: closingDate,
+    description: `قيد الإقفال السنوي الشامل للسنة المالية ${fiscalYear} وترحيل صافي ${
+      netIncome >= 0 ? 'الأرباح' : 'الخسائر'
+    } إلى الأرباح المحتجزة`,
+    referenceType: 'year_end_closing',
+    referenceNumber: `CLOSE-${fiscalYear}`,
+    lines,
+    createdBy: closedBy || 'المدير المالي',
+  });
+
+  const retainedEarningsAfter = retainedEarningsBefore + netIncome;
+
+  // 5. Save audit record in settings
+  const auditRecord: YearEndClosingRecord = {
+    id: `close-${fiscalYear}-${Date.now()}`,
+    fiscalYear,
+    closingDate,
+    closedAt: new Date().toISOString(),
+    closedBy: closedBy || 'المدير المالي',
+    totalRevenues,
+    totalExpenses,
+    netIncome,
+    retainedEarningsBefore,
+    retainedEarningsAfter,
+    closingJournalEntryId: closingEntry.id,
+    closingJournalEntryNumber: closingEntry.entryNumber,
+    notes: notes || undefined,
+  };
+
+  closingsList.push(auditRecord);
+  await db.settings.put({
+    key: 'fiscal_year_closings',
+    value: closingsList,
+  });
+
+  return {
+    closingEntry,
+    auditRecord,
+    netIncome,
+  };
+}
+
+/**
+ * جلب سجل وسجل عمليات الإقفال السنوي السابقة
+ */
+export async function getYearEndClosingHistory(): Promise<YearEndClosingRecord[]> {
+  const setting = await db.settings.get('fiscal_year_closings');
+  return setting?.value || [];
+}
+

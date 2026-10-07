@@ -590,7 +590,8 @@ export type JournalReferenceType =
   | 'expense' 
   | 'purchase' 
   | 'salary' 
-  | 'manual_entry';
+  | 'manual_entry'
+  | 'year_end_closing';
 
 export interface JournalEntry {
   id: string;
@@ -609,4 +610,20 @@ export interface JournalEntry {
   status: 'posted' | 'draft' | 'cancelled';
   createdBy: string;
   createdAt: string;
+}
+
+export interface YearEndClosingRecord {
+  id: string;
+  fiscalYear: number;
+  closingDate: string; // YYYY-MM-DD
+  closedAt: string; // ISO
+  closedBy: string;
+  totalRevenues: number;
+  totalExpenses: number;
+  netIncome: number; // positive = profit, negative = loss
+  retainedEarningsBefore: number;
+  retainedEarningsAfter: number;
+  closingJournalEntryId: string;
+  closingJournalEntryNumber: string;
+  notes?: string;
 }

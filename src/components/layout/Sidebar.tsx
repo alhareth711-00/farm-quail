@@ -139,7 +139,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onSelectTab }) => {
     },
     {
       id: 'accounting',
-      label: 'شجرة الحسابات والقيود اليومية',
+      label: 'التقارير المالية وشجرة الحسابات والإقفال',
       icon: <Scale className="w-5 h-5" />,
       managerOnly: true,
     },
