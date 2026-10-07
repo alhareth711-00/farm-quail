@@ -42,7 +42,7 @@ interface ProductsManagementViewProps {
   onNavigateToPOS?: () => void;
 }
 
-export const categoryMeta: Record<
+const categoryMeta: Record<
   ProductCategory,
   { label: string; icon: React.ReactNode; bg: string; text: string; border: string }
 > = {
