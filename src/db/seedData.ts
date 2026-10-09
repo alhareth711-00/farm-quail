@@ -647,7 +647,7 @@ export async function initializeDatabase(forceRefresh = false) {
         bagWeightKg: 50,
         totalKg: 2100,
         costPerBag: 29000,
-        minThresholdBags: 10,
+        minThresholdBags: 1,
         lastRestockedDate: daysAgo(4),
       },
       {
@@ -658,7 +658,7 @@ export async function initializeDatabase(forceRefresh = false) {
         bagWeightKg: 50,
         totalKg: 1750,
         costPerBag: 27000,
-        minThresholdBags: 8,
+        minThresholdBags: 1,
         lastRestockedDate: daysAgo(5),
       },
       {
@@ -669,7 +669,7 @@ export async function initializeDatabase(forceRefresh = false) {
         bagWeightKg: 50,
         totalKg: 3250,
         costPerBag: 25500,
-        minThresholdBags: 15,
+        minThresholdBags: 1,
         lastRestockedDate: daysAgo(2),
       },
     ];

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { db } from '../../db';
 import { useLiveQuery } from 'dexie-react-hooks';
 import type { FeedStock, FeedConsumptionRecord, MedicationSchedule, MedicationType, FeedType } from '../../types';
@@ -28,6 +28,8 @@ import {
   Coins,
   Building2,
   CreditCard,
+  Settings,
+  Zap,
 } from 'lucide-react';
 
 export const HealthFeedView: React.FC = () => {
@@ -43,10 +45,27 @@ export const HealthFeedView: React.FC = () => {
   );
   const medications = useLiveQuery(() => db.medicationSchedules.toArray(), []);
   const batteries = useLiveQuery(() => db.batteries.toArray(), []);
+  const tiers = useLiveQuery(() => db.tiers.toArray(), []);
   const rooms = useLiveQuery(() => db.rooms.toArray(), []);
+
+  // Ensure default min alert threshold is 1 bag across all feed stocks
+  useEffect(() => {
+    const migrateThresholds = async () => {
+      const stocks = await db.feedStock.toArray();
+      for (const stock of stocks) {
+        if (!stock.minThresholdBags || [10, 8, 15].includes(stock.minThresholdBags)) {
+          await db.feedStock.update(stock.id, { minThresholdBags: 1 });
+        }
+      }
+    };
+    migrateThresholds();
+  }, []);
 
   // Modals
   const [showAddMedModal, setShowAddMedModal] = useState(false);
+  const [showConfigModal, setShowConfigModal] = useState<FeedStock | null>(null);
+  const [configMinBags, setConfigMinBags] = useState<number>(1);
+  const [configBagWeight, setConfigBagWeight] = useState<number>(50);
 
   // Financial Feed Purchase Modal (شراء وتوريد أعلاف بسند مالي وربط محاسبي ومخزني)
   const [showPurchaseFeedModal, setShowPurchaseFeedModal] = useState(false);
@@ -185,6 +204,106 @@ export const HealthFeedView: React.FC = () => {
     setShowAdjustStockModal(null);
   };
 
+  // Save feed threshold and bag weight configuration
+  const handleSaveConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!showConfigModal) return;
+
+    const minBags = Math.max(1, Math.floor(Number(configMinBags)) || 1);
+    const bagWeight = Math.max(1, Number(configBagWeight) || 50);
+    const newBagsCount = Math.floor(showConfigModal.totalKg / bagWeight);
+
+    await db.feedStock.update(showConfigModal.id, {
+      minThresholdBags: minBags,
+      bagWeightKg: bagWeight,
+      bagsCount: newBagsCount,
+    });
+
+    toast(`تم حفظ إعدادات الحد الأدنى ووزن الكيس لـ (${showConfigModal.name}) بنجاح!`, 'success');
+    setShowConfigModal(null);
+  };
+
+  // Flock Layer Females Calculation (Battery tiers + Floor layer rooms)
+  const batteryFemales = tiers?.reduce((sum, t) => sum + (Number(t.femalesCount) || 0), 0) || 0;
+  const roomLayerFemales =
+    rooms
+      ?.filter(
+        (r) =>
+          r.purpose === 'layers' ||
+          r.name?.includes('بياض') ||
+          r.name?.includes('أمهات')
+      )
+      ?.reduce((sum, r) => sum + (Number(r.femalesCount) || 0), 0) || 0;
+  const totalLayerFemales = batteryFemales + roomLayerFemales;
+
+  // Standard benchmark: 30g/day per laying female
+  const dailyLayerGrams = totalLayerFemales * 30;
+  const dailyLayerKg = Math.round((dailyLayerGrams / 1000) * 100) / 100;
+  const layerFeed = feedStocks?.find((f) => f.feedType === 'layer_production');
+  const layerBagWeight = layerFeed?.bagWeightKg || 50;
+  const dailyLayerBags = Math.round((dailyLayerKg / layerBagWeight) * 100) / 100;
+  const layerCostPerBag = layerFeed?.costPerBag || 27000;
+  const dailyLayerCost = Math.round(dailyLayerKg * (layerCostPerBag / layerBagWeight));
+
+  const todayLayerLogs = consumptionLogs?.filter(
+    (l) => l.date === todayStr && (l.feedType === 'layer_production' || l.targetId === 'all-layers')
+  );
+  const isLayerConsumptionRecordedToday = !!(todayLayerLogs && todayLayerLogs.length > 0);
+  const todayRecordedKg = todayLayerLogs?.reduce((sum, l) => sum + (Number(l.kgUsed) || 0), 0) || 0;
+
+  // Record automated daily feed consumption for layer flock
+  const handleRecordDailyLayerConsumption = async () => {
+    if (totalLayerFemales <= 0) {
+      toast('لا توجد إناث بياض مسجلة حالياً في البطاريات أو العنابر', 'warning');
+      return;
+    }
+    if (!layerFeed) {
+      toast('لم يتم العثور على صنف علف البياض في المستودع', 'error');
+      return;
+    }
+    if (layerFeed.totalKg < dailyLayerKg) {
+      toast(
+        `⚠️ رصيد علف البياض بالمستودع (${layerFeed.totalKg.toLocaleString('ar-SA')} كغم) غير كافٍ للاستهلاك اليومي المطلوب (${dailyLayerKg.toLocaleString('ar-SA')} كغم)!`,
+        'error'
+      );
+      return;
+    }
+
+    try {
+      const newTotalKg = Math.max(0, Math.round((layerFeed.totalKg - dailyLayerKg) * 100) / 100);
+      const newBags = Math.floor(newTotalKg / layerFeed.bagWeightKg);
+
+      await db.feedStock.update(layerFeed.id, {
+        totalKg: newTotalKg,
+        bagsCount: newBags,
+      });
+
+      await db.feedConsumption.add({
+        id: `fc-daily-layers-${Date.now()}`,
+        date: todayStr,
+        targetType: 'all',
+        targetId: 'all-layers',
+        targetName: `قطيع إناث البياض (${totalLayerFemales.toLocaleString('ar-SA')} أنثى)`,
+        feedType: 'layer_production',
+        bagsUsed: dailyLayerBags,
+        kgUsed: dailyLayerKg,
+        costAmount: dailyLayerCost,
+        birdsCount: totalLayerFemales,
+        notes: `خصم استهلاك يومي تلقائي لإناث السمان البياضة بمعدل 30 جم/طير (إجمالي: ${dailyLayerKg} كغم / ${dailyLayerBags} كيس) بتكلفة تقديرية ${dailyLayerCost.toLocaleString('ar-SA')} ${farmSettings.currency}`,
+        recordedBy: userName || 'النظام الآلي / مسؤول التغذية',
+        createdAt: new Date().toISOString(),
+      });
+
+      toast(
+        `✅ تم تسجيل استهلاك اليوم بنجاح: خصم ${dailyLayerKg.toLocaleString('ar-SA')} كغم (${dailyLayerBags} كيس) لـ ${totalLayerFemales.toLocaleString('ar-SA')} أنثى بياض بتكلفة ${dailyLayerCost.toLocaleString('ar-SA')} ${farmSettings.currency}!`,
+        'success'
+      );
+    } catch (err: any) {
+      console.error('Error recording daily layer feed consumption:', err);
+      toast('تعذر تسجيل استهلاك اليوم، يرجى المحاولة لاحقاً', 'error');
+    }
+  };
+
   // Save Feed Consumption & Deduct
   const handleSaveConsumption = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -199,7 +318,11 @@ export const HealthFeedView: React.FC = () => {
     }
 
     const kg = Number(kgConsumed);
-    const bags = kg / 50;
+    const stockItem = feedStocks?.find((f) => f.feedType === selectedFeedType);
+    const bagWeight = stockItem?.bagWeightKg || 50;
+    const bags = kg / bagWeight;
+    const unitCost = stockItem ? (stockItem.costPerBag || 0) / bagWeight : 0;
+    const costAmount = Math.round(kg * unitCost);
 
     await db.feedConsumption.add({
       id: `fc-${Date.now()}`,
@@ -210,22 +333,22 @@ export const HealthFeedView: React.FC = () => {
       feedType: selectedFeedType as any,
       bagsUsed: Math.round(bags * 100) / 100,
       kgUsed: kg,
-      recordedBy: 'عامل المزرعة',
+      costAmount,
+      recordedBy: userName || 'عامل المزرعة',
       createdAt: new Date().toISOString(),
     });
 
     // Deduct from stock
-    const stockItem = feedStocks?.find((f) => f.feedType === selectedFeedType);
     if (stockItem) {
       const newKg = Math.max(0, stockItem.totalKg - kg);
-      const newBags = Math.floor(newKg / stockItem.bagWeightKg);
+      const newBags = Math.floor(newKg / bagWeight);
       await db.feedStock.update(stockItem.id, {
         totalKg: newKg,
         bagsCount: newBags,
       });
     }
 
-    toast(`تم تسجيل استهلاك ${kg} كغم علف وخصمها من الرصيد العام`, 'success');
+    toast(`تم تسجيل استهلاك ${kg} كغم علف وخصمها من الرصيد العام بتكلفة ${costAmount.toLocaleString('ar-SA')} ${farmSettings.currency}`, 'success');
     setShowConsumptionModal(false);
   };
 
@@ -363,6 +486,81 @@ export const HealthFeedView: React.FC = () => {
         </div>
       )}
 
+      {/* Automated Daily Layer Feed Consumption Banner */}
+      <div className="p-5 rounded-3xl bg-gradient-to-r from-amber-500/10 via-orange-500/5 to-slate-50 border border-amber-300/80 shadow-apple flex flex-col lg:flex-row items-start lg:items-center justify-between gap-5">
+        <div className="flex items-start gap-3.5">
+          <div className="w-12 h-12 rounded-2xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-md">
+            <Zap className="w-6 h-6 stroke-[2.5]" />
+          </div>
+          <div className="space-y-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h3 className="text-base font-black text-slate-900">
+                استهلاك العلف اليومي المؤتمت (إناث السمان البياضة)
+              </h3>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-200">
+                معيار قياسي: 30 جرام / طير يومياً
+              </span>
+              {isLayerConsumptionRecordedToday && (
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200 flex items-center gap-1">
+                  <CheckCircle2 className="w-3 h-3" />
+                  <span>تم التسجيل اليوم ({todayRecordedKg.toLocaleString('ar-SA')} كغم)</span>
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-slate-600 leading-relaxed max-w-2xl">
+              يتم احتساب الاستهلاك اليومي لعلف البياض بدقة استناداً إلى تعداد الإناث المسجلة بالمزرعة (البطاريات والعنابر)، مع الخصم الفوري من رصيد المستودع وقيد التكلفة التشغيلية.
+            </p>
+            <div className="flex flex-wrap gap-4 pt-1 text-xs">
+              <div>
+                <span className="text-slate-500">إناث البياض المسجلة: </span>
+                <span className="font-black text-slate-900 font-mono">
+                  {totalLayerFemales.toLocaleString('ar-SA')} أنثى
+                </span>
+                <span className="text-[11px] text-slate-400 mr-1">
+                  ({batteryFemales.toLocaleString('ar-SA')} بطاريات + {roomLayerFemales.toLocaleString('ar-SA')} عنابر)
+                </span>
+              </div>
+              <div>
+                <span className="text-slate-500">الاستهلاك اليومي: </span>
+                <span className="font-black text-amber-800 font-mono">
+                  {dailyLayerKg.toLocaleString('ar-SA')} كغم
+                </span>
+                <span className="text-[11px] text-slate-500 mr-1">
+                  ({dailyLayerBags.toLocaleString('ar-SA')} كيس)
+                </span>
+              </div>
+              <div>
+                <span className="text-slate-500">التكلفة اليومية التقديرية: </span>
+                <span className="font-black text-emerald-700 font-mono">
+                  {dailyLayerCost.toLocaleString('ar-SA')} {farmSettings.currency}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="shrink-0 flex flex-col sm:flex-row gap-2 w-full lg:w-auto">
+          <button
+            type="button"
+            onClick={handleRecordDailyLayerConsumption}
+            disabled={totalLayerFemales <= 0}
+            className={`px-5 py-3 rounded-2xl font-black text-xs flex items-center justify-center gap-2 shadow-apple transition-all ${
+              isLayerConsumptionRecordedToday
+                ? 'bg-amber-600 hover:bg-amber-700 text-white'
+                : 'bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-white'
+            }`}
+            title="خصم استهلاك اليوم بدقة وتسجيل التكلفة"
+          >
+            <Zap className="w-4 h-4 fill-current" />
+            <span>
+              {isLayerConsumptionRecordedToday
+                ? 'تسجيل استهلاك إضافي لليوم'
+                : `⚡ تسجيل استهلاك اليوم (${dailyLayerKg.toLocaleString('ar-SA')} كغم)`}
+            </span>
+          </button>
+        </div>
+      </div>
+
       {/* Part 1: Feed Stock Warehouse Cards */}
       <div>
         <div className="flex items-center gap-2 mb-3">
@@ -390,12 +588,26 @@ export const HealthFeedView: React.FC = () => {
                       وزن الكيس: {feed.bagWeightKg} كغم
                     </span>
                   </div>
-                  <div
-                    className={`w-10 h-10 rounded-2xl flex items-center justify-center ${
-                      isLow ? 'bg-rose-100 text-rose-700' : 'bg-amber-50 text-amber-700'
-                    }`}
-                  >
-                    <Package className="w-5 h-5" />
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowConfigModal(feed);
+                        setConfigMinBags(feed.minThresholdBags ?? 1);
+                        setConfigBagWeight(feed.bagWeightKg ?? 50);
+                      }}
+                      className="p-2 rounded-2xl hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors"
+                      title="⚙️ تعديل الحد الأدنى للتنبيه ووزن الكيس"
+                    >
+                      <Settings className="w-4 h-4" />
+                    </button>
+                    <div
+                      className={`w-10 h-10 rounded-2xl flex items-center justify-center ${
+                        isLow ? 'bg-rose-100 text-rose-700' : 'bg-amber-50 text-amber-700'
+                      }`}
+                    >
+                      <Package className="w-5 h-5" />
+                    </div>
                   </div>
                 </div>
 
@@ -412,7 +624,7 @@ export const HealthFeedView: React.FC = () => {
                 {isLow && (
                   <div className="text-[11px] text-rose-700 font-bold mb-3 flex items-center gap-1">
                     <AlertTriangle className="w-3.5 h-3.5" />
-                    <span>رصيد منخفض (الحد الأدنى: {feed.minThresholdBags} كيس)</span>
+                    <span>كمية منخفضة (الحد الأدنى: {feed.minThresholdBags} كيس)</span>
                   </div>
                 )}
 
@@ -549,6 +761,86 @@ export const HealthFeedView: React.FC = () => {
                 <tr>
                   <td colSpan={7} className="p-8 text-center text-slate-400">
                     لا توجد برامج علاجية مسجلة حالياً
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Part 3: Recent Feed Consumption Logs Table */}
+      <div className="rounded-3xl glass-panel overflow-hidden border border-slate-200/80 p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Utensils className="w-5 h-5 text-amber-600" />
+            <h3 className="font-extrabold text-sm text-slate-800">
+              سجل حركات استهلاك الأعلاف اليومية والتشغيلية
+            </h3>
+          </div>
+          <span className="text-xs text-slate-400 font-mono">
+            إجمالي الحركات: {consumptionLogs?.length || 0}
+          </span>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-right text-xs">
+            <thead className="bg-slate-100/75 border-b border-slate-200 text-slate-600 font-extrabold uppercase tracking-wider">
+              <tr>
+                <th className="p-3.5">التاريخ</th>
+                <th className="p-3.5">الجهة / القطيع المستهدف</th>
+                <th className="p-3.5">نوع العلف</th>
+                <th className="p-3.5">الكمية بالكغم</th>
+                <th className="p-3.5">ما يعادل بالأكياس</th>
+                <th className="p-3.5">التكلفة المالية</th>
+                <th className="p-3.5">المسؤول والملاحظات</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {consumptionLogs && consumptionLogs.length > 0 ? (
+                consumptionLogs.slice(0, 15).map((log) => {
+                  const feedObj = feedStocks?.find((f) => f.feedType === log.feedType);
+                  const feedLabel =
+                    feedObj?.name ||
+                    (log.feedType === 'layer_production'
+                      ? 'علف بياض إنتاجي 20%'
+                      : log.feedType === 'starter_24_27'
+                      ? 'علف بادي سمان 24-27%'
+                      : 'علف نامي تسمين 20-22%');
+
+                  return (
+                    <tr key={log.id} className="hover:bg-slate-50/70 transition-colors">
+                      <td className="p-3.5 font-mono text-slate-600">{log.date}</td>
+                      <td className="p-3.5 font-bold text-slate-900">{log.targetName}</td>
+                      <td className="p-3.5">
+                        <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-900 border border-amber-200 text-[10px] font-bold">
+                          {feedLabel}
+                        </span>
+                      </td>
+                      <td className="p-3.5 font-mono font-black text-amber-900">
+                        {log.kgUsed.toLocaleString('ar-SA')} كغم
+                      </td>
+                      <td className="p-3.5 font-mono text-slate-600">
+                        {log.bagsUsed} كيس
+                      </td>
+                      <td className="p-3.5 font-mono font-bold text-emerald-700">
+                        {log.costAmount
+                          ? `${log.costAmount.toLocaleString('ar-SA')} ${farmSettings.currency}`
+                          : '-'}
+                      </td>
+                      <td className="p-3.5 text-slate-500">
+                        <div className="text-[11px] font-medium text-slate-700">{log.recordedBy || 'المشرف'}</div>
+                        {log.notes && (
+                          <div className="text-[10px] text-slate-400 truncate max-w-xs">{log.notes}</div>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })
+              ) : (
+                <tr>
+                  <td colSpan={7} className="p-8 text-center text-slate-400">
+                    لا توجد حركات استهلاك أعلاف مسجلة حتى الآن
                   </td>
                 </tr>
               )}
@@ -946,6 +1238,26 @@ export const HealthFeedView: React.FC = () => {
                 </select>
               </div>
 
+              {/* Quick Preset: Layer flock daily consumption */}
+              {totalLayerFemales > 0 && (
+                <div className="p-3 rounded-2xl bg-amber-50 border border-amber-200 text-xs flex items-center justify-between">
+                  <div className="text-[11px] text-amber-950 font-bold">
+                    استهلاك قطيع البياض ({totalLayerFemales.toLocaleString('ar-SA')} أنثى × 30 جم = {dailyLayerKg} كغم)
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedFeedType('layer_production');
+                      setKgConsumed(dailyLayerKg);
+                    }}
+                    className="px-2.5 py-1 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-black text-[11px] transition-all flex items-center gap-1 shadow-xs"
+                  >
+                    <Zap className="w-3 h-3" />
+                    <span>تطبيق</span>
+                  </button>
+                </div>
+              )}
+
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
                   الكمية المستهلكة (كغم)
@@ -1304,6 +1616,99 @@ export const HealthFeedView: React.FC = () => {
                   type="button"
                   onClick={() => setShowAdjustStockModal(null)}
                   className="px-5 py-3 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition-all"
+                >
+                  إلغاء
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Feed Configuration (الحد الأدنى ووزن الكيس) */}
+      {showConfigModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-3xl p-6 max-w-sm w-full shadow-apple-modal border border-slate-100 text-right">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-xl bg-slate-100 text-slate-700">
+                  <Settings className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-slate-900">
+                    إعدادات صنف العلف
+                  </h3>
+                  <p className="text-[11px] text-slate-500">{showConfigModal.name}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowConfigModal(null)}
+                className="p-1.5 rounded-xl hover:bg-slate-100 text-slate-400"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveConfig} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  حد التنبيه عند انخفاض الكمية (أكياس):
+                </label>
+                <div className="relative">
+                  <input
+                    type="number"
+                    min="1"
+                    step="1"
+                    required
+                    value={configMinBags}
+                    onChange={(e) => setConfigMinBags(Math.max(1, Number(e.target.value)))}
+                    className="w-full glass-input text-center text-lg font-mono font-black"
+                  />
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">
+                    كيس
+                  </span>
+                </div>
+                <span className="text-[10px] text-slate-400 mt-1 block">
+                  يظهر تنبيه "كمية منخفضة" إذا وصل الرصيد إلى هذا الحد أو أقل (الافتراضي 1 كيس).
+                </span>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  وزن الكيس الافتراضي (كيلوجرام):
+                </label>
+                <div className="relative">
+                  <input
+                    type="number"
+                    min="1"
+                    step="0.5"
+                    required
+                    value={configBagWeight}
+                    onChange={(e) => setConfigBagWeight(Math.max(1, Number(e.target.value)))}
+                    className="w-full glass-input text-center text-lg font-mono font-black text-emerald-800"
+                  />
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">
+                    كغم
+                  </span>
+                </div>
+                <span className="text-[10px] text-slate-400 mt-1 block">
+                  يُستخدم لحساب الكميات بين الأكياس والكيلوجرامات في المستودع ونقاط البيع (الافتراضي 50 كغم).
+                </span>
+              </div>
+
+              <div className="flex gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="submit"
+                  className="flex-1 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs shadow-sm transition-all flex items-center justify-center gap-1.5"
+                >
+                  <Save className="w-4 h-4" />
+                  <span>حفظ الإعدادات</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowConfigModal(null)}
+                  className="px-4 py-2.5 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs"
                 >
                   إلغاء
                 </button>

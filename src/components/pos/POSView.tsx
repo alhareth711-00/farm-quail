@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { db } from '../../db';
 import { useLiveQuery } from 'dexie-react-hooks';
-import type { Product, Customer, OrderInvoice, OrderItem, PaymentMethod } from '../../types';
+import type { Product, Customer, OrderInvoice, OrderItem, PaymentMethod, FeedStock } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import {
@@ -55,6 +55,7 @@ export const POSView: React.FC = () => {
   const customers = useLiveQuery(() => db.customers.toArray(), []);
   const invoices = useLiveQuery(() => db.invoices.reverse().sortBy('createdAt'), []);
   const eggBatches = useLiveQuery(() => db.eggBatches.where('status').equals('available').toArray(), []);
+  const feedStocks = useLiveQuery(() => db.feedStock.toArray(), []);
 
   // Sorted egg batches by oldest production date first (FIFO)
   const sortedAvailableEggBatches = React.useMemo(() => {
@@ -257,8 +258,72 @@ export const POSView: React.FC = () => {
     }
   };
 
+  // Feed warehouse inventory link helpers
+  const isFeedProduct = (prod: Product): boolean => {
+    return prod.category === 'feed_supplies' || (prod.name ? prod.name.includes('علف') : false);
+  };
+
+  const getMatchingFeedStock = (prod: Product, stocks?: FeedStock[]): FeedStock | undefined => {
+    if (!stocks || stocks.length === 0) return undefined;
+    const name = (prod.name || '').toLowerCase();
+    if (name.includes('بادي') || name.includes('24') || name.includes('starter')) {
+      return stocks.find((s) => s.feedType === 'starter_24_27') || stocks[0];
+    }
+    if (name.includes('نامي') || name.includes('تسمين') || name.includes('grower')) {
+      return stocks.find((s) => s.feedType === 'grower_fattening') || stocks[1] || stocks[0];
+    }
+    if (
+      name.includes('بياض') ||
+      name.includes('إنتاج') ||
+      name.includes('انتاج') ||
+      name.includes('امهات') ||
+      name.includes('أمهات') ||
+      name.includes('layer')
+    ) {
+      return stocks.find((s) => s.feedType === 'layer_production') || stocks[2] || stocks[0];
+    }
+    return stocks[0];
+  };
+
+  const getFeedItemWeightKg = (prod: Product, quantity: number, feedStock?: FeedStock): number => {
+    const unit = (prod.unit || '').trim().toLowerCase();
+    const bagWeight = feedStock?.bagWeightKg || 50;
+    if (unit.includes('كيس') || unit.includes('bag')) {
+      return quantity * bagWeight;
+    }
+    if (unit.includes('جرام') || unit.includes('جم') || unit.includes('gram')) {
+      return quantity / 1000;
+    }
+    // Default for 'كغم', 'كجم', 'كيلو', 'kg'
+    return quantity;
+  };
+
   // Cart operations
   const addToCart = (product: Product) => {
+    // Feed stock availability validation
+    if (isFeedProduct(product)) {
+      const matchedFeed = getMatchingFeedStock(product, feedStocks);
+      if (matchedFeed) {
+        const currentCartKg = cart
+          .filter((item) => {
+            const p = products?.find((pr) => pr.id === item.productId);
+            return p && getMatchingFeedStock(p, feedStocks)?.id === matchedFeed.id;
+          })
+          .reduce((sum, item) => {
+            const p = products?.find((pr) => pr.id === item.productId);
+            return sum + (p ? getFeedItemWeightKg(p, item.quantity, matchedFeed) : 0);
+          }, 0);
+        const additionalKg = getFeedItemWeightKg(product, 1, matchedFeed);
+        if (currentCartKg + additionalKg > matchedFeed.totalKg) {
+          toast(
+            `⚠️ لا يمكن إضافة المنتج! رصيد المستودع الحالي من (${matchedFeed.name}) هو ${matchedFeed.totalKg.toLocaleString('ar-SA')} كغم (${matchedFeed.bagsCount} كيس) فقط.`,
+            'error'
+          );
+          return;
+        }
+      }
+    }
+
     const unitPrice = priceType === 'wholesale' ? product.wholesalePrice : product.retailPrice;
     const isEgg = product.trayCapacity === 18 || product.category === 'table_eggs';
     const oldest = sortedAvailableEggBatches[0];
@@ -316,6 +381,32 @@ export const POSView: React.FC = () => {
   };
 
   const updateQuantity = (productId: string, delta: number) => {
+    if (delta > 0) {
+      const prod = products?.find((p) => p.id === productId);
+      if (prod && isFeedProduct(prod)) {
+        const matchedFeed = getMatchingFeedStock(prod, feedStocks);
+        if (matchedFeed) {
+          const currentCartKg = cart
+            .filter((item) => {
+              const p = products?.find((pr) => pr.id === item.productId);
+              return p && getMatchingFeedStock(p, feedStocks)?.id === matchedFeed.id;
+            })
+            .reduce((sum, item) => {
+              const p = products?.find((pr) => pr.id === item.productId);
+              return sum + (p ? getFeedItemWeightKg(p, item.quantity, matchedFeed) : 0);
+            }, 0);
+          const additionalKg = getFeedItemWeightKg(prod, delta, matchedFeed);
+          if (currentCartKg + additionalKg > matchedFeed.totalKg) {
+            toast(
+              `⚠️ رصيد العلف في المستودع غير كافٍ! المتوفر: ${matchedFeed.totalKg.toLocaleString('ar-SA')} كغم (${matchedFeed.bagsCount} كيس).`,
+              'warning'
+            );
+            return;
+          }
+        }
+      }
+    }
+
     setCart((prev) =>
       prev
         .map((item) => {
@@ -471,6 +562,35 @@ export const POSView: React.FC = () => {
       return;
     }
 
+    // Feed stock availability validation
+    const feedDemandByStockId: Record<string, { feedStock: FeedStock; requestedKg: number }> = {};
+    for (const item of cart) {
+      const prod = products?.find((p) => p.id === item.productId);
+      if (prod && isFeedProduct(prod)) {
+        const matchedStock = getMatchingFeedStock(prod, feedStocks);
+        if (matchedStock) {
+          const kg = getFeedItemWeightKg(prod, item.quantity, matchedStock);
+          if (!feedDemandByStockId[matchedStock.id]) {
+            feedDemandByStockId[matchedStock.id] = { feedStock: matchedStock, requestedKg: 0 };
+          }
+          feedDemandByStockId[matchedStock.id].requestedKg += kg;
+        }
+      }
+    }
+
+    for (const stockId in feedDemandByStockId) {
+      const demand = feedDemandByStockId[stockId];
+      const liveStock = await db.feedStock.get(stockId);
+      const availableKg = liveStock ? liveStock.totalKg : demand.feedStock.totalKg;
+      if (demand.requestedKg > availableKg) {
+        toast(
+          `⚠️ لا يمكن إتمام البيع! رصيد المستودع من (${demand.feedStock.name}) هو ${availableKg.toLocaleString('ar-SA')} كغم فقط، بينما المطلوب في الفاتورة ${demand.requestedKg.toLocaleString('ar-SA')} كغم.`,
+          'error'
+        );
+        return;
+      }
+    }
+
     const invNumber = `INV-${Date.now().toString().slice(-6)}`;
     const today = new Date();
     const dateStr = today.toISOString().split('T')[0];
@@ -525,6 +645,37 @@ export const POSView: React.FC = () => {
       });
     }
 
+    // Deduct feed stocks and record operational consumption movements
+    for (const stockId in feedDemandByStockId) {
+      const demand = feedDemandByStockId[stockId];
+      const liveStock = await db.feedStock.get(stockId);
+      if (liveStock) {
+        const newTotalKg = Math.max(0, Math.round((liveStock.totalKg - demand.requestedKg) * 100) / 100);
+        const newBags = Math.floor(newTotalKg / liveStock.bagWeightKg);
+        await db.feedStock.update(liveStock.id, {
+          totalKg: newTotalKg,
+          bagsCount: newBags,
+        });
+
+        const unitCostKg = (liveStock.costPerBag || 0) / liveStock.bagWeightKg;
+        const costAmount = Math.round(demand.requestedKg * unitCostKg);
+        await db.feedConsumption.add({
+          id: `fc-pos-${Date.now()}-${stockId}`,
+          date: dateStr,
+          targetType: 'all',
+          targetId: 'pos-sale',
+          targetName: `مبيعات نقطة البيع (فاتورة ${invNumber}) - العميل: ${activeCustomer?.name || 'نقدي عام'}`,
+          feedType: liveStock.feedType,
+          bagsUsed: Math.round((demand.requestedKg / liveStock.bagWeightKg) * 100) / 100,
+          kgUsed: demand.requestedKg,
+          costAmount,
+          notes: `بيع علف عبر POS (فاتورة ${invNumber} ${manualInvoiceNumber ? `| دفتري: ${manualInvoiceNumber}` : ''}) - الكمية: ${demand.requestedKg} كغم`,
+          recordedBy: userName || 'كاشير المبيعات',
+          createdAt: new Date().toISOString(),
+        });
+      }
+    }
+
     // Deduct stock for items and direct deduction from egg inventory batches
     for (const item of cart) {
       const prod = products?.find((p) => p.id === item.productId);
@@ -577,6 +728,17 @@ export const POSView: React.FC = () => {
           await db.products.update(prod.id, {
             stockQuantity: totalAvailableCages,
           });
+        } else if (isFeedProduct(prod)) {
+          // Feed supply product: synchronize product.stockQuantity with feedStock
+          const matchedStock = getMatchingFeedStock(prod, feedStocks);
+          if (matchedStock) {
+            const liveStock = await db.feedStock.get(matchedStock.id);
+            if (liveStock) {
+              const unit = (prod.unit || '').trim().toLowerCase();
+              const newQty = unit.includes('كيس') ? liveStock.bagsCount : liveStock.totalKg;
+              await db.products.update(prod.id, { stockQuantity: newQty });
+            }
+          }
         } else {
           // Standard physical item
           await db.products.update(prod.id, {
@@ -730,12 +892,21 @@ export const POSView: React.FC = () => {
               {filteredProducts.map((prod) => {
                 const price = priceType === 'wholesale' ? prod.wholesalePrice : prod.retailPrice;
                 const isEgg = prod.category === 'table_eggs' || prod.category === 'hatching_eggs';
+                const isFeed = isFeedProduct(prod);
+                const matchedFeed = isFeed ? getMatchingFeedStock(prod, feedStocks) : undefined;
+                const feedAvailableKg = matchedFeed ? matchedFeed.totalKg : 0;
+                const feedAvailableBags = matchedFeed ? matchedFeed.bagsCount : 0;
+                const isFeedOutOfStock = isFeed && feedAvailableKg <= 0;
 
                 return (
                   <div
                     key={prod.id}
                     onClick={() => addToCart(prod)}
-                    className="p-4 rounded-3xl glass-card border border-slate-200/80 hover:border-emerald-400 hover:shadow-md transition-all cursor-pointer flex flex-col justify-between group active:scale-[0.98] relative overflow-hidden"
+                    className={`p-4 rounded-3xl glass-card border transition-all cursor-pointer flex flex-col justify-between group active:scale-[0.98] relative overflow-hidden ${
+                      isFeedOutOfStock
+                        ? 'border-rose-200 bg-rose-50/20 opacity-80'
+                        : 'border-slate-200/80 hover:border-emerald-400 hover:shadow-md'
+                    }`}
                   >
                     <div>
                       <div className="flex items-center justify-between mb-2">
@@ -748,13 +919,25 @@ export const POSView: React.FC = () => {
                             </span>
                           )}
                         </span>
-                        <span
-                          className={`text-[10px] font-mono font-bold ${
-                            prod.stockQuantity > 0 ? 'text-slate-500' : 'text-rose-500'
-                          }`}
-                        >
-                          متاح: {prod.stockQuantity}
-                        </span>
+                        {isFeed ? (
+                          <span
+                            className={`text-[10px] font-mono font-bold ${
+                              feedAvailableKg > 0 ? 'text-amber-800 font-extrabold' : 'text-rose-600 font-black'
+                            }`}
+                          >
+                            {feedAvailableKg > 0
+                              ? `مستودع: ${feedAvailableBags} كيس (${feedAvailableKg.toLocaleString('ar-SA')} كغم)`
+                              : 'نفد من المستودع'}
+                          </span>
+                        ) : (
+                          <span
+                            className={`text-[10px] font-mono font-bold ${
+                              prod.stockQuantity > 0 ? 'text-slate-500' : 'text-rose-500'
+                            }`}
+                          >
+                            متاح: {prod.stockQuantity}
+                          </span>
+                        )}
                       </div>
 
                       <div className="flex items-start gap-2 mb-2">

@@ -261,12 +261,15 @@ export interface FeedStock {
 export interface FeedConsumptionRecord {
   id: string;
   date: string;
-  targetType: 'battery' | 'room' | 'quarantine';
+  targetType: 'all' | 'battery' | 'room' | 'quarantine';
   targetId: string;
   targetName: string;
   feedType: FeedType;
   bagsUsed: number;
   kgUsed: number;
+  costAmount?: number; // التكلفة التشغيلية المالية لحركة الاستهلاك
+  birdsCount?: number; // عدد الطيور المستهلكة
+  notes?: string;
   recordedBy: string;
   createdAt: string;
 }
