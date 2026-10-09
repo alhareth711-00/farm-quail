@@ -17,6 +17,7 @@ import type {
   DetailedMortalityRecord,
   ReceiptVoucher,
   Employee,
+  BroodingBatch,
 } from '../types';
 
 import { STRICT_ARABIC_BATTERY_ORDER } from '../types';
@@ -1335,6 +1336,120 @@ export async function initializeDatabase(forceRefresh = false) {
     }
   }
 
+  // 13.1 Hatchery Batches & Brooding Batches
+  const incCount = await db.incubationBatches.count();
+  if (incCount === 0 || forceRefresh) {
+    await db.incubationBatches.clear();
+    const initialIncBatches: IncubationBatch[] = [
+      {
+        id: 'inc-1',
+        batchNumber: 'INC-2026-001',
+        incubatorName: 'فقاسة الصقر الذكية 1000',
+        eggCount: 800,
+        startDate: daysAgo(9),
+        candlingDate: daysAgo(1),
+        transferDate: daysAgo(-5),
+        hatchDate: daysAgo(-8),
+        candlingDone: true,
+        fertileEggs: 720,
+        infertileEggs: 80,
+        hatchedDone: false,
+        hatchedChicks: 0,
+        weakChicks: 0,
+        deadInShell: 0,
+        status: 'candled',
+        notes: 'بيض مخصب ممتاز نخب أول من عنبر الأمهات',
+        createdAt: new Date(daysAgo(9)).toISOString(),
+      },
+      {
+        id: 'inc-2',
+        batchNumber: 'INC-2026-002',
+        incubatorName: 'فقاسة النور 500',
+        eggCount: 500,
+        startDate: daysAgo(15),
+        candlingDate: daysAgo(7),
+        transferDate: daysAgo(1),
+        hatchDate: daysAgo(-2),
+        candlingDone: true,
+        fertileEggs: 450,
+        infertileEggs: 50,
+        hatchedDone: false,
+        hatchedChicks: 0,
+        weakChicks: 0,
+        deadInShell: 0,
+        status: 'transferred',
+        notes: 'تم النقل لسلات الفقاس وإيقاف التقليب، التفقيس المتوقع خلال 48 ساعة',
+        createdAt: new Date(daysAgo(15)).toISOString(),
+      },
+    ];
+    await db.incubationBatches.bulkPut(initialIncBatches);
+  }
+
+  const brdCount = await db.broodingBatches.count();
+  if (brdCount === 0 || forceRefresh) {
+    await db.broodingBatches.clear();
+    const initialBroodBatches: BroodingBatch[] = [
+      {
+        id: 'brd-1',
+        batchNumber: 'BRD-2026-001',
+        source: 'تفريخ داخلي (فقاسة الصقر 1)',
+        hatchDate: daysAgo(6),
+        initialChicksCount: 460,
+        currentChicksCount: 452,
+        mortalityCount: 8,
+        sexType: 'unsexed',
+        locationName: 'حضانة تدفئة رقم 1 (غرفة 5)',
+        selectedFeedType: 'starter_24_27',
+        targetWeightGrams: 45,
+        currentWeightGrams: 38,
+        totalFeedConsumedKg: 16.5,
+        status: 'active',
+        notes: 'المرحلة 1: حرارة مستقرة 33-34 مئوية، حيوية ونشاط ممتازين',
+        createdAt: new Date(daysAgo(6)).toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+      {
+        id: 'brd-2',
+        batchNumber: 'BRD-2026-002',
+        source: 'تفريخ داخلي (فقاسة النور)',
+        hatchDate: daysAgo(24),
+        initialChicksCount: 480,
+        currentChicksCount: 470,
+        mortalityCount: 10,
+        sexType: 'unsexed',
+        locationName: 'بطاريات تحضين وفطام (عنبر أوسع)',
+        selectedFeedType: 'starter_24_27',
+        targetWeightGrams: 140,
+        currentWeightGrams: 135,
+        totalFeedConsumedKg: 185,
+        status: 'active',
+        notes: 'المرحلة 2: فطام حراري وبطاريات تحضين أوسع بدون تدفئة، تجهيزاً للفرز بعد أسبوعين',
+        createdAt: new Date(daysAgo(24)).toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+      {
+        id: 'brd-3',
+        batchNumber: 'BRD-2026-003',
+        source: 'تفريخ داخلي (فقاسة الصقر 1)',
+        hatchDate: daysAgo(14),
+        initialChicksCount: 520,
+        currentChicksCount: 512,
+        mortalityCount: 8,
+        sexType: 'unsexed',
+        locationName: 'حضانة تدفئة رقم 2 (غرفة 6)',
+        selectedFeedType: 'starter_24_27',
+        targetWeightGrams: 90,
+        currentWeightGrams: 86,
+        totalFeedConsumedKg: 78,
+        status: 'active',
+        notes: 'المرحلة 1: عمر أسبوعين، خفض الحرارة تدريجياً إلى 28 مئوية',
+        createdAt: new Date(daysAgo(14)).toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+    ];
+    await db.broodingBatches.bulkPut(initialBroodBatches);
+  }
+
   // 14. Mark database as permanently initialized so reloads never overwrite user data
   await db.settings.put({
     key: 'isDatabaseInitialized',
@@ -1381,6 +1496,7 @@ export async function clearDemoTransactionsForLiveProduction(
   await db.feedConsumption.clear();
   await db.medicationSchedules.clear();
   await db.incubationBatches.clear();
+  await db.broodingBatches.clear();
   await db.fatteningBatches.clear();
   await db.fatteningWeights.clear();
   await db.slaughterRecords.clear();

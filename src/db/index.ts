@@ -30,6 +30,7 @@ import type {
   SalaryPaymentRecord,
   Account,
   JournalEntry,
+  BroodingBatch,
 } from '../types';
 
 export class QuailFarmDB extends Dexie {
@@ -41,6 +42,7 @@ export class QuailFarmDB extends Dexie {
   eggLogs!: Table<EggProductionLog, string>;
   eggBatches!: Table<EggBatchRecord, string>;
   incubationBatches!: Table<IncubationBatch, string>;
+  broodingBatches!: Table<BroodingBatch, string>;
   fatteningBatches!: Table<FatteningBatch, string>;
   fatteningWeights!: Table<FatteningWeightSample, string>;
   slaughterRecords!: Table<SlaughterRecord, string>;
@@ -122,6 +124,10 @@ export class QuailFarmDB extends Dexie {
     this.version(7).stores({
       accounts: 'id, code, name, type, subType, normalBalance, isActive',
       journalEntries: 'id, entryNumber, date, referenceType, referenceId, status',
+    });
+
+    this.version(8).stores({
+      broodingBatches: 'id, batchNumber, phase, status, hatchDate',
     });
   }
 }

@@ -202,6 +202,105 @@ export interface IncubationBatch {
   createdAt: string;
 }
 
+// --- 5.1 Brooding & Chick Rearing (التحضين المرحلي لصيصان السمان) ---
+export type BroodingPhase = 'phase1_heated' | 'phase2_weaning' | 'graduated';
+
+export interface BroodingWeeklyRate {
+  weekNumber: number; // 1 to 5
+  minAgeDays: number;
+  maxAgeDays: number;
+  label: string; // e.g. "الأسبوع 1 (عمر 1-7 يوم)"
+  phase: 'phase1_heated' | 'phase2_weaning';
+  phaseLabel: string; // "حضانات تدفئة" أو "بطاريات تحضين أوسع"
+  defaultGramsPerChickDay: number; // جرام/طير/يوم
+  recommendedTempC: string; // e.g. "35°C - 33°C"
+  recommendedFeed: string; // e.g. "علف بادي 24-27%"
+}
+
+export interface BroodingFeedScheduleSettings {
+  rates: BroodingWeeklyRate[];
+}
+
+export interface BroodingBatch {
+  id: string;
+  batchNumber: string; // e.g. "BRD-2026-001"
+  incubationBatchId?: string; // رابط لدفعة التفريخ إن وجدت
+  source: string; // تفريخ داخلي، شراء كتاكيت
+  hatchDate: string; // YYYY-MM-DD تاريخ الفقس وبدء التحضين
+  initialChicksCount: number; // العدد الأولي
+  currentChicksCount: number; // العدد الحي الحالي
+  mortalityCount: number; // عدد النفوق التراكمي
+  sexType: 'unsexed'; // دائماً مختلط الجنسين (Unsexed)
+  locationName: string; // اسم الحضانة أو الغرفة أو البطارية
+  selectedFeedType: FeedType; // 'starter_24_27' أو 'grower_fattening'
+  targetWeightGrams?: number; // الوزن المستهدف (اختياري)
+  currentWeightGrams?: number; // متوسط الوزن الحالي (اختياري)
+  lastFeedDeductionDate?: string; // آخر تاريخ تم فيه خصم العلف اليومي
+  totalFeedConsumedKg?: number; // إجمالي استهلاك العلف المتراكم
+  status: 'active' | 'graduated' | 'archived';
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const DEFAULT_BROODING_RATES: BroodingWeeklyRate[] = [
+  {
+    weekNumber: 1,
+    minAgeDays: 1,
+    maxAgeDays: 7,
+    label: 'الأسبوع 1 (عمر 1 - 7 يوم)',
+    phase: 'phase1_heated',
+    phaseLabel: 'المرحلة 1: حضانات تدفئة',
+    defaultGramsPerChickDay: 6.5,
+    recommendedTempC: '35°C - 33°C',
+    recommendedFeed: 'علف بادي 24-27% بروتين',
+  },
+  {
+    weekNumber: 2,
+    minAgeDays: 8,
+    maxAgeDays: 14,
+    label: 'الأسبوع 2 (عمر 8 - 14 يوم)',
+    phase: 'phase1_heated',
+    phaseLabel: 'المرحلة 1: حضانات تدفئة',
+    defaultGramsPerChickDay: 12.0,
+    recommendedTempC: '32°C - 30°C',
+    recommendedFeed: 'علف بادي 24-27% بروتين',
+  },
+  {
+    weekNumber: 3,
+    minAgeDays: 15,
+    maxAgeDays: 21,
+    label: 'الأسبوع 3 (عمر 15 - 21 يوم)',
+    phase: 'phase1_heated',
+    phaseLabel: 'المرحلة 1: حضانات تدفئة',
+    defaultGramsPerChickDay: 16.5,
+    recommendedTempC: '28°C - 26°C',
+    recommendedFeed: 'علف بادي 24% بروتين',
+  },
+  {
+    weekNumber: 4,
+    minAgeDays: 22,
+    maxAgeDays: 28,
+    label: 'الأسبوع 4 (عمر 22 - 28 يوم)',
+    phase: 'phase2_weaning',
+    phaseLabel: 'المرحلة 2: بطاريات تحضين أوسع',
+    defaultGramsPerChickDay: 21.0,
+    recommendedTempC: '24°C - 22°C (فطام حراري)',
+    recommendedFeed: 'علف بادي 24% أو نامي 20-22%',
+  },
+  {
+    weekNumber: 5,
+    minAgeDays: 29,
+    maxAgeDays: 38,
+    label: 'الأسبوع 5 (عمر 29 - 38 يوم)',
+    phase: 'phase2_weaning',
+    phaseLabel: 'المرحلة 2: بطاريات تحضين أوسع',
+    defaultGramsPerChickDay: 25.0,
+    recommendedTempC: 'حرارة العنبر الطبيعية (تجهيز الفرز)',
+    recommendedFeed: 'علف نامي 20-22% بروتين',
+  },
+];
+
 // --- 6. Fattening & Meat Production ---
 export interface FatteningBatch {
   id: string;
