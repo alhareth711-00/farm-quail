@@ -9,6 +9,7 @@ import type {
   ReceiptVoucher,
   VoucherPaymentType,
   OrderInvoice,
+  FeedType,
 } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
@@ -16,6 +17,10 @@ import {
   recordExpenseJournalEntry,
   recordReceiptVoucherJournalEntry,
 } from '../../services/accountingService';
+import {
+  purchaseFeedStock,
+  calculateWeightedAverageCost,
+} from '../../services/feedPurchaseService';
 import {
   WalletCards,
   Plus,
@@ -47,6 +52,9 @@ import {
   Coins,
   ChevronRight,
   Sparkles,
+  FileCheck,
+  Calculator,
+  Package,
 } from 'lucide-react';
 
 interface FinanceViewProps {
@@ -69,6 +77,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
   const purchases = useLiveQuery(() => db.purchases.reverse().sortBy('date'), []);
   const customCategories = useLiveQuery(() => db.customCategories.toArray(), []);
   const accounts = useLiveQuery(() => db.accounts.toArray(), []);
+  const feedStocks = useLiveQuery(() => db.feedStock.toArray(), []);
 
   // Main Tab State:
   // 'receipts' = سندات القبض
@@ -100,23 +109,34 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
   // -------------------------------------------------------------
   // Modals States
   // -------------------------------------------------------------
-  // 1. Receipt Voucher Modal
-  const [showAddReceiptModal, setShowAddReceiptModal] = useState(false);
-  const [recCustomerId, setRecCustomerId] = useState('');
-  const [recAmount, setRecAmount] = useState<number | ''>('');
-  const [recPaymentType, setRecPaymentType] = useState<VoucherPaymentType>('cash');
-  const [recDate, setRecDate] = useState(new Date().toISOString().split('T')[0]);
-  const [recNotes, setRecNotes] = useState('');
+  // Redesigned Financial Voucher Modal (نموذج تسجيل السند المالي الموحد: صرف / قبض)
+  const [showVoucherModal, setShowVoucherModal] = useState(false);
+  const [voucherType, setVoucherType] = useState<'expense' | 'receipt'>('expense');
+  const [voucherDate, setVoucherDate] = useState(new Date().toISOString().split('T')[0]);
+  const [voucherManualRef, setVoucherManualRef] = useState(''); // رقم الفاتورة أو الإيصال الدفتري الورقي
 
-  // 2. Expense Voucher Modal
-  const [showAddExpenseModal, setShowAddExpenseModal] = useState(false);
-  const [expDate, setExpDate] = useState(new Date().toISOString().split('T')[0]);
+  // Expense Fields
   const [expCategory, setExpCategory] = useState<ExpenseCategory>('feed_purchase');
+  const [expPaidFrom, setExpPaidFrom] = useState<'cash_box' | 'bank_account'>('cash_box');
   const [expAmount, setExpAmount] = useState<number | ''>('');
   const [expDescription, setExpDescription] = useState('');
   const [expRecipient, setExpRecipient] = useState('');
-  const [expPaidFrom, setExpPaidFrom] = useState<'cash_box' | 'bank_account'>('cash_box');
-  const [expRef, setExpRef] = useState('');
+
+  // Feed Purchase Specific (Conditional Fields)
+  const [feedType, setFeedType] = useState<FeedType>('layer_production');
+  const [feedBagsCount, setFeedBagsCount] = useState<number | ''>(20);
+  const [feedCostPerBag, setFeedCostPerBag] = useState<number | ''>(27000);
+
+  // Receipt Voucher Fields
+  const [recCustomerId, setRecCustomerId] = useState('');
+  const [recAmount, setRecAmount] = useState<number | ''>('');
+  const [recPaymentType, setRecPaymentType] = useState<VoucherPaymentType>('cash');
+  const [recNotes, setRecNotes] = useState('');
+  const [isVoucherSubmitting, setIsVoucherSubmitting] = useState(false);
+
+  // Legacy modal state holders (kept for compatibility)
+  const [showAddReceiptModal, setShowAddReceiptModal] = useState(false);
+  const [showAddExpenseModal, setShowAddExpenseModal] = useState(false);
 
   // 3. Custom Category Modal
   const [showAddCategoryModal, setShowAddCategoryModal] = useState(false);
@@ -177,6 +197,10 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
   // Cash Box balance from Chart of Accounts
   const cashAccount = accounts?.find((a) => a.code === '10101');
   const cashBalance = cashAccount ? cashAccount.currentBalance : 0;
+
+  // Current Bank Account balance from Chart of Accounts
+  const bankAccount = accounts?.find((a) => a.code === '10105');
+  const bankBalance = bankAccount ? bankAccount.currentBalance : 0;
 
   // Total Customer Debt from Customers table
   const totalCustomerDebt = customers?.reduce((sum, c) => sum + (Number(c.currentDebt) || 0), 0) || 0;
@@ -308,111 +332,194 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
   };
 
   // -------------------------------------------------------------
-  // ACTIONS & HANDLERS
+  // ACTIONS & HANDLERS: Vouchers (سندات القبض والصرف المحاسبية)
   // -------------------------------------------------------------
 
-  // 1. Save Receipt Voucher (سند قبض وتحصيل دين عميل)
-  const handleSaveReceiptVoucher = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const amountNum = Number(recAmount);
-    if (!recCustomerId || amountNum <= 0) {
-      toast('يرجى اختيار العميل وتحديد مبلغ سند القبض بشكل صحيح', 'error');
-      return;
+  // Open Expense Voucher Modal
+  const handleOpenExpenseVoucher = () => {
+    setVoucherType('expense');
+    setVoucherDate(todayStr);
+    setExpCategory('feed_purchase');
+    setExpPaidFrom('cash_box');
+    setExpAmount('');
+    setExpDescription('');
+    setExpRecipient('');
+    setVoucherManualRef('');
+    setFeedBagsCount(20);
+    const defaultFeed = feedStocks?.[0];
+    if (defaultFeed) {
+      setFeedType(defaultFeed.feedType);
+      setFeedCostPerBag(defaultFeed.costPerBag || 27000);
     }
-
-    const selectedCust = customers?.find((c) => c.id === recCustomerId);
-    if (!selectedCust) {
-      toast('العميل المحدد غير موجود', 'error');
-      return;
-    }
-
-    const voucherNum = `RV-${Date.now().toString().slice(-6)}`;
-    const newVoucher: ReceiptVoucher = {
-      id: `rv-${Date.now()}`,
-      voucherNumber: voucherNum,
-      date: recDate,
-      customerId: selectedCust.id,
-      customerName: selectedCust.name,
-      amount: amountNum,
-      paymentType: recPaymentType,
-      notes: recNotes.trim() || undefined,
-      recordedBy: userName || 'محاسب المالية',
-      createdAt: new Date().toISOString(),
-    };
-
-    try {
-      // 1. Add to receipt vouchers table
-      await db.receiptVouchers.add(newVoucher);
-
-      // 2. Automated Double-Entry Journal Entry
-      await recordReceiptVoucherJournalEntry(newVoucher);
-
-      // 3. Deduct debt from customer profile
-      const newDebt = Math.max(0, (Number(selectedCust.currentDebt) || 0) - amountNum);
-      await db.customers.update(selectedCust.id, {
-        currentDebt: newDebt,
-      });
-
-      toast(
-        `تم إصدار سند القبض (${voucherNum}) بمبلغ ${amountNum.toLocaleString('ar-SA')} ${farmSettings.currency} وخصمها من ذمة العميل بنجاح!`,
-        'success'
-      );
-
-      // Reset Form & Close Modal
-      setShowAddReceiptModal(false);
-      setRecCustomerId('');
-      setRecAmount('');
-      setRecNotes('');
-    } catch (err: any) {
-      console.error('Error saving receipt voucher:', err);
-      toast(err?.message || 'تعذر إصدار سند القبض', 'error');
-    }
+    setShowVoucherModal(true);
   };
 
-  // 2. Save Operational Expense (سند صرف ومصروفات تشغيلية)
-  const handleSaveExpense = async (e: React.FormEvent) => {
+  // Open Receipt Voucher Modal
+  const handleOpenReceiptVoucher = (
+    defaultCustomerId = '',
+    defaultAmount: number | '' = '',
+    defaultRef = '',
+    defaultNotes = ''
+  ) => {
+    setVoucherType('receipt');
+    setVoucherDate(todayStr);
+    setRecCustomerId(defaultCustomerId);
+    setRecAmount(defaultAmount);
+    setRecPaymentType('cash');
+    setVoucherManualRef(defaultRef);
+    setRecNotes(defaultNotes);
+    setShowVoucherModal(true);
+  };
+
+  // Unified Handler: Save Financial Voucher (سند صرف أو قبض مالي)
+  const handleSaveVoucher = async (e: React.FormEvent) => {
     e.preventDefault();
-    const amountNum = Number(expAmount);
-    if (amountNum <= 0 || !expDescription.trim()) {
-      toast('يرجى إدخال مبلغ صحيح وبيان واضح لسند الصرف', 'error');
-      return;
-    }
 
-    const newExp: ExpenseRecord = {
-      id: `exp-${Date.now()}`,
-      date: expDate,
-      category: expCategory,
-      amount: amountNum,
-      description: expDescription.trim(),
-      recipient: expRecipient.trim() || undefined,
-      invoiceOrBillRef: expRef.trim() || undefined,
-      paidFrom: expPaidFrom,
-      recordedBy: userName || 'محاسب المزرعة',
-      createdAt: new Date().toISOString(),
-    };
+    if (voucherType === 'expense') {
+      const isFeed = expCategory === 'feed_purchase';
+      const bags = Number(feedBagsCount);
+      const cost = Number(feedCostPerBag);
+      const calculatedFeedTotal = isFeed ? bags * cost : 0;
+      const amountNum = isFeed ? calculatedFeedTotal : Number(expAmount);
 
-    try {
-      // 1. Save to expenses table
-      await db.expenses.add(newExp);
+      if (isFeed) {
+        if (!bags || isNaN(bags) || bags <= 0) {
+          toast('يرجى إدخال عدد أكياس صحيح أكبر من الصفر', 'error');
+          return;
+        }
+        if (!cost || isNaN(cost) || cost <= 0) {
+          toast('يرجى إدخال سعر شراء صحيح للكيس الواحد أكبر من الصفر', 'error');
+          return;
+        }
+      } else {
+        if (!amountNum || isNaN(amountNum) || amountNum <= 0) {
+          toast('يرجى إدخال مبلغ صحيح لسند الصرف أكبر من الصفر', 'error');
+          return;
+        }
+        if (!expDescription.trim()) {
+          toast('يرجى إدخال بيان واضح لغرض سند الصرف', 'error');
+          return;
+        }
+      }
 
-      // 2. Automated Double-Entry Journal Entry (Debits Expense, Credits Cash Box/Bank)
-      await recordExpenseJournalEntry(newExp);
+      // ⚠️ التحقق الصارم من كفاية الرصيد في جهة الخصم المحددة (منع تجاوز السيولة)
+      const availableBalance = expPaidFrom === 'cash_box' ? cashBalance : bankBalance;
+      const accountLabel = expPaidFrom === 'cash_box' ? 'الصندوق الرئيسي (كاش)' : 'الحساب البنكي الجاري';
 
-      toast(
-        `تم تسجيل سند الصرف بمبلغ ${amountNum.toLocaleString('ar-SA')} ${farmSettings.currency} وخصمها من ${
-          expPaidFrom === 'cash_box' ? 'الصندوق الرئيسي (كاش)' : 'الحساب البنكي'
-        } بنجاح!`,
-        'success'
-      );
+      if (amountNum > availableBalance) {
+        const deficit = amountNum - availableBalance;
+        toast(
+          `لا يمكن حفظ سند الصرف: رصيد ${accountLabel} غير كافٍ! المتوفر: ${availableBalance.toLocaleString('ar-SA')} ${farmSettings.currency} (العجز: ${deficit.toLocaleString('ar-SA')} ${farmSettings.currency})`,
+          'error'
+        );
+        return;
+      }
 
-      setShowAddExpenseModal(false);
-      setExpAmount('');
-      setExpDescription('');
-      setExpRecipient('');
-      setExpRef('');
-    } catch (err: any) {
-      console.error('Error recording expense:', err);
-      toast(err?.message || 'تعذر تسجيل سند الصرف', 'error');
+      setIsVoucherSubmitting(true);
+      try {
+        if (isFeed) {
+          // ربط شراء الأعلاف تلقائياً بالمخزون ومتوسط التكلفة المرجح WAC
+          const result = await purchaseFeedStock({
+            feedType,
+            bagsCount: bags,
+            costPerBag: cost,
+            paidFrom: expPaidFrom,
+            supplier: expRecipient.trim() || undefined,
+            invoiceRef: voucherManualRef.trim() || undefined,
+            date: voucherDate,
+            notes: expDescription.trim() || undefined,
+            recordedBy: userName || 'محاسب المالية',
+          });
+
+          toast(
+            `تم تسجيل سند صرف وشراء ${bags} كيس (${result.feedStock.name}) بنجاح! تم تحديث رصيد المخزون ومتوسط التكلفة وخصم ${amountNum.toLocaleString('ar-SA')} ${farmSettings.currency} من ${accountLabel}.`,
+            'success'
+          );
+        } else {
+          const newExp: ExpenseRecord = {
+            id: `exp-${Date.now()}`,
+            date: voucherDate,
+            category: expCategory,
+            amount: amountNum,
+            description: expDescription.trim(),
+            recipient: expRecipient.trim() || undefined,
+            invoiceOrBillRef: voucherManualRef.trim() || undefined,
+            paidFrom: expPaidFrom,
+            recordedBy: userName || 'محاسب المالية',
+            createdAt: new Date().toISOString(),
+          };
+
+          await db.expenses.add(newExp);
+          await recordExpenseJournalEntry(newExp);
+
+          toast(
+            `تم تسجيل سند الصرف بمبلغ ${amountNum.toLocaleString('ar-SA')} ${farmSettings.currency} وخصمها من ${accountLabel} بنجاح!`,
+            'success'
+          );
+        }
+
+        setShowVoucherModal(false);
+      } catch (err: any) {
+        console.error('Error saving expense voucher:', err);
+        toast(err?.message || 'تعذر تسجيل سند الصرف', 'error');
+      } finally {
+        setIsVoucherSubmitting(false);
+      }
+    } else {
+      // Receipt Voucher (سند قبض وتحصيل دين عميل)
+      const amountNum = Number(recAmount);
+      if (!recCustomerId || !amountNum || amountNum <= 0) {
+        toast('يرجى اختيار العميل وتحديد مبلغ سند القبض بشكل صحيح', 'error');
+        return;
+      }
+
+      const selectedCust = customers?.find((c) => c.id === recCustomerId);
+      if (!selectedCust) {
+        toast('العميل المحدد غير موجود', 'error');
+        return;
+      }
+
+      setIsVoucherSubmitting(true);
+      try {
+        const voucherNum = `RV-${Date.now().toString().slice(-6)}`;
+        const noteParts = [
+          recNotes.trim(),
+          voucherManualRef.trim() ? `رقم دفتري: ${voucherManualRef.trim()}` : '',
+        ].filter(Boolean);
+
+        const newVoucher: ReceiptVoucher = {
+          id: `rv-${Date.now()}`,
+          voucherNumber: voucherNum,
+          date: voucherDate,
+          customerId: selectedCust.id,
+          customerName: selectedCust.name,
+          amount: amountNum,
+          paymentType: recPaymentType,
+          notes: noteParts.length > 0 ? noteParts.join(' | ') : undefined,
+          recordedBy: userName || 'محاسب المالية',
+          createdAt: new Date().toISOString(),
+        };
+
+        await db.receiptVouchers.add(newVoucher);
+        await recordReceiptVoucherJournalEntry(newVoucher);
+
+        const newDebt = Math.max(0, (Number(selectedCust.currentDebt) || 0) - amountNum);
+        await db.customers.update(selectedCust.id, {
+          currentDebt: newDebt,
+        });
+
+        toast(
+          `تم إصدار سند القبض (${voucherNum}) بمبلغ ${amountNum.toLocaleString('ar-SA')} ${farmSettings.currency} وخصمها من ذمة العميل بنجاح!`,
+          'success'
+        );
+
+        setShowVoucherModal(false);
+      } catch (err: any) {
+        console.error('Error saving receipt voucher:', err);
+        toast(err?.message || 'تعذر إصدار سند القبض', 'error');
+      } finally {
+        setIsVoucherSubmitting(false);
+      }
     }
   };
 
@@ -506,13 +613,13 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
 
   // Shortcut: Open Receipt Modal for a specific unpaid/partial invoice
   const handleOpenReceiptForInvoice = (inv: OrderInvoice) => {
-    if (inv.customerId) {
-      setRecCustomerId(inv.customerId);
-    }
     const rem = Number(inv.remainingAmount) || 0;
-    setRecAmount(rem > 0 ? rem : '');
-    setRecNotes(`سداد متبقي فاتورة بيع: ${inv.invoiceNumber}${inv.manualInvoiceNumber ? ` (يدوي: ${inv.manualInvoiceNumber})` : ''}`);
-    setShowAddReceiptModal(true);
+    handleOpenReceiptVoucher(
+      inv.customerId || '',
+      rem > 0 ? rem : '',
+      inv.manualInvoiceNumber || inv.invoiceNumber || '',
+      `سداد متبقي فاتورة بيع: ${inv.invoiceNumber}${inv.manualInvoiceNumber ? ` (يدوي: ${inv.manualInvoiceNumber})` : ''}`
+    );
   };
 
   // -------------------------------------------------------------
@@ -664,12 +771,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
 
           {/* New Receipt Voucher Button */}
           <button
-            onClick={() => {
-              setRecCustomerId('');
-              setRecAmount('');
-              setRecNotes('');
-              setShowAddReceiptModal(true);
-            }}
+            onClick={() => handleOpenReceiptVoucher()}
             className="px-4 py-2 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-extrabold text-xs flex items-center gap-1.5 shadow-apple transition-all"
           >
             <ArrowDownLeft className="w-4 h-4 stroke-[3]" />
@@ -678,13 +780,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
 
           {/* New Expense Voucher Button */}
           <button
-            onClick={() => {
-              setExpAmount('');
-              setExpDescription('');
-              setExpRecipient('');
-              setExpRef('');
-              setShowAddExpenseModal(true);
-            }}
+            onClick={() => handleOpenExpenseVoucher()}
             className="px-4 py-2 rounded-2xl bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-700 hover:to-amber-700 text-white font-extrabold text-xs flex items-center gap-1.5 shadow-apple transition-all"
           >
             <ArrowUpRight className="w-4 h-4 stroke-[3]" />
@@ -901,12 +997,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
             </div>
 
             <button
-              onClick={() => {
-                setRecCustomerId('');
-                setRecAmount('');
-                setRecNotes('');
-                setShowAddReceiptModal(true);
-              }}
+              onClick={() => handleOpenReceiptVoucher()}
               className="px-4 py-2 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 shadow-sm transition-all"
             >
               <Plus className="w-4 h-4 stroke-[3]" />
@@ -1042,13 +1133,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
               </button>
 
               <button
-                onClick={() => {
-                  setExpAmount('');
-                  setExpDescription('');
-                  setExpRecipient('');
-                  setExpRef('');
-                  setShowAddExpenseModal(true);
-                }}
+                onClick={() => handleOpenExpenseVoucher()}
                 className="px-4 py-2 rounded-2xl bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 shadow-sm transition-all"
               >
                 <Plus className="w-4 h-4 stroke-[3]" />
@@ -1550,360 +1635,644 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
       )}
 
       {/* ========================================================= */}
-      {/* 9. MODAL: سند قبض جديد (New Receipt Voucher Modal) */}
+      {/* 9 & 10. REDESIGNED FINANCIAL VOUCHER MODAL (سند صرف / سند قبض) */}
       {/* ========================================================= */}
-      {showAddReceiptModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-100 animate-scaleUp">
-            <div className="flex items-center justify-between pb-4 border-b border-slate-100 mb-5">
-              <div className="flex items-center gap-2">
-                <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
-                  <ArrowDownLeft className="w-5 h-5 stroke-[2.5]" />
-                </div>
-                <div>
-                  <h3 className="text-base font-black text-slate-900">
-                    إصدار سند قبض جديد (تحصيل دين عميل)
-                  </h3>
-                  <p className="text-[11px] text-slate-500">
-                    تسجيل دفعة مستلمة وربطها تلقائياً بمديونية العميل والصندوق.
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowAddReceiptModal(false)}
-                className="p-1 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-all"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
+      {(showVoucherModal || showAddReceiptModal || showAddExpenseModal) && (() => {
+        const handleCloseModal = () => {
+          setShowVoucherModal(false);
+          setShowAddReceiptModal(false);
+          setShowAddExpenseModal(false);
+        };
 
-            <form onSubmit={handleSaveReceiptVoucher} className="space-y-4">
-              {/* Customer Selector */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  اختيار العميل *
-                </label>
-                <select
-                  required
-                  value={recCustomerId}
-                  onChange={(e) => {
-                    const cid = e.target.value;
-                    setRecCustomerId(cid);
-                    const cust = customers?.find((c) => c.id === cid);
-                    if (cust && (!recAmount || recAmount === 0)) {
-                      setRecAmount(cust.currentDebt > 0 ? cust.currentDebt : '');
-                    }
-                  }}
-                  className="w-full px-3.5 py-2.5 text-xs rounded-2xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 font-bold"
-                >
-                  <option value="">-- اختر العميل من القائمة --</option>
-                  {customers?.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name} {c.currentDebt > 0 ? `(المديونية: ${c.currentDebt.toLocaleString()} ${farmSettings.currency})` : '(لا توجد ديون)'}
-                    </option>
-                  ))}
-                </select>
-              </div>
+        const selectedCustomerInModal = customers?.find((c) => c.id === recCustomerId);
+        const isFeedExpense = voucherType === 'expense' && expCategory === 'feed_purchase';
+        const selectedFeed = feedStocks?.find((f) => f.feedType === feedType);
 
-              {/* Customer Debt Quick Card */}
-              {selectedCustomerInModal && (
-                <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-between">
-                  <div>
-                    <span className="text-[11px] text-slate-500 block">المديونية المستحقة الحالية:</span>
-                    <span className="text-sm font-black text-rose-600 font-sans">
-                      {selectedCustomerInModal.currentDebt.toLocaleString('ar-SA')} {farmSettings.currency}
-                    </span>
+        const bagsNum = typeof feedBagsCount === 'number' ? Math.max(0, feedBagsCount) : 0;
+        const costNum = typeof feedCostPerBag === 'number' ? Math.max(0, feedCostPerBag) : 0;
+        const calculatedFeedTotal = bagsNum * costNum;
+        const feedWeightKg = bagsNum * 50;
+
+        const currentFeedBags = selectedFeed?.bagsCount || 0;
+        const currentFeedCost = selectedFeed?.costPerBag || 0;
+        const predictedNewBags = currentFeedBags + bagsNum;
+        const predictedNewWAC = calculateWeightedAverageCost(currentFeedBags, currentFeedCost, bagsNum, costNum);
+
+        const effectiveAmount =
+          voucherType === 'expense'
+            ? isFeedExpense
+              ? calculatedFeedTotal
+              : Number(expAmount) || 0
+            : Number(recAmount) || 0;
+
+        const availableBalance = expPaidFrom === 'cash_box' ? cashBalance : bankBalance;
+        const accountLabel = expPaidFrom === 'cash_box' ? 'الصندوق الرئيسي (كاش)' : 'الحساب البنكي الجاري';
+        const isInsufficientBalance =
+          voucherType === 'expense' && effectiveAmount > 0 && availableBalance < effectiveAmount;
+        const balanceDeficit = Math.max(0, effectiveAmount - availableBalance);
+
+        // Rapid Verification for manual reference
+        const matchedInvoice = voucherManualRef.trim()
+          ? invoices?.find(
+              (inv) =>
+                (inv.manualInvoiceNumber &&
+                  inv.manualInvoiceNumber.trim().toLowerCase() === voucherManualRef.trim().toLowerCase()) ||
+                (inv.invoiceNumber &&
+                  inv.invoiceNumber.trim().toLowerCase() === voucherManualRef.trim().toLowerCase())
+            )
+          : null;
+
+        return (
+          <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn">
+            <div className="bg-white rounded-3xl max-w-2xl w-full p-6 shadow-2xl border border-slate-100 animate-scaleUp max-h-[92vh] overflow-y-auto text-right">
+              {/* Modal Header */}
+              <div className="flex items-center justify-between pb-4 border-b border-slate-100 mb-4">
+                <div className="flex items-center gap-3">
+                  <div
+                    className={`w-10 h-10 rounded-2xl flex items-center justify-center ${
+                      voucherType === 'expense'
+                        ? 'bg-rose-50 text-rose-600 border border-rose-100'
+                        : 'bg-emerald-50 text-emerald-600 border border-emerald-100'
+                    }`}
+                  >
+                    {voucherType === 'expense' ? (
+                      <ArrowUpRight className="w-5 h-5 stroke-[2.5]" />
+                    ) : (
+                      <ArrowDownLeft className="w-5 h-5 stroke-[2.5]" />
+                    )}
                   </div>
-                  {selectedCustomerInModal.currentDebt > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => setRecAmount(selectedCustomerInModal.currentDebt)}
-                      className="px-3 py-1.5 rounded-xl bg-emerald-100 hover:bg-emerald-200 text-emerald-800 text-xs font-extrabold transition-all"
-                    >
-                      ⚡ سداد كامل الدين
-                    </button>
+                  <div>
+                    <h3 className="text-base font-black text-slate-900">
+                      {voucherType === 'expense'
+                        ? 'تسجيل سند صرف مالي (مصروفات تشغيلية)'
+                        : 'إصدار سند قبض مالي (تحصيل دين عميل)'}
+                    </h3>
+                    <p className="text-[11px] text-slate-500">
+                      نموذج مالي متكامل وفق نظام القيد المزدوج والربط المخزني التلقائي.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={handleCloseModal}
+                  className="p-1.5 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-all"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveVoucher} className="space-y-4">
+                {/* 1. الصف الأول: (التاريخ | نوع السند) */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      تاريخ السند *
+                    </label>
+                    <input
+                      type="date"
+                      required
+                      value={voucherDate}
+                      onChange={(e) => setVoucherDate(e.target.value)}
+                      className="w-full px-3.5 py-2.5 text-xs rounded-2xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 font-bold"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      نوع السند المالي *
+                    </label>
+                    <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-100 rounded-2xl">
+                      <button
+                        type="button"
+                        onClick={() => setVoucherType('expense')}
+                        className={`py-2 px-3 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 transition-all ${
+                          voucherType === 'expense'
+                            ? 'bg-rose-600 text-white shadow-sm'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        <ArrowUpRight className="w-3.5 h-3.5 stroke-[3]" />
+                        <span>سند صرف (مصروف)</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setVoucherType('receipt')}
+                        className={`py-2 px-3 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 transition-all ${
+                          voucherType === 'receipt'
+                            ? 'bg-emerald-600 text-white shadow-sm'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        <ArrowDownLeft className="w-3.5 h-3.5 stroke-[3]" />
+                        <span>سند قبض (تحصيل)</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 2. الصف الثاني: (التصنيف المحاسبي | جهة الدفع/القبض) */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {voucherType === 'expense' ? (
+                    <>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">
+                          التصنيف المحاسبي للمصروف *
+                        </label>
+                        <select
+                          value={expCategory}
+                          onChange={(e) => {
+                            const cat = e.target.value as any;
+                            setExpCategory(cat);
+                            if (cat === 'feed_purchase' && feedStocks && feedStocks.length > 0) {
+                              const f = feedStocks.find((x) => x.feedType === feedType) || feedStocks[0];
+                              setFeedType(f.feedType);
+                              if (f.costPerBag) setFeedCostPerBag(f.costPerBag);
+                            }
+                          }}
+                          className="w-full px-3.5 py-2.5 text-xs rounded-2xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-rose-500/20 font-bold"
+                        >
+                          <option value="feed_purchase">🌾 شراء واستخدام أعلاف</option>
+                          <option value="packaging_bedding">🪵 نشارة خشب وأطباق تعبئة</option>
+                          <option value="utilities_maintenance">🔧 صيانة عنابر وأقفاص ومعدات</option>
+                          <option value="salaries_advances">👥 سلف وأجور ورواتب العمال</option>
+                          <option value="delivery_petrol">⛽ بترول ومحروقات التوصيل والمولد</option>
+                          <option value="medications_vitamins">💊 أدوية وفيتامينات ولقاحات</option>
+                          <option value="electricity_water">💡 كهرباء ومياه وتشغيل</option>
+                          {customCategories?.map((c) => (
+                            <option key={c.id} value={c.name}>
+                              🏷️ {c.name}
+                            </option>
+                          ))}
+                          <option value="other">📦 مصروفات تشغيلية أخرى</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">
+                          جهة الخصم والدفع (دائن) *
+                        </label>
+                        <select
+                          value={expPaidFrom}
+                          onChange={(e) => setExpPaidFrom(e.target.value as any)}
+                          className="w-full px-3.5 py-2.5 text-xs rounded-2xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-rose-500/20 font-bold"
+                        >
+                          <option value="cash_box">
+                            الصندوق الرئيسي (كاش) - 10101 [الرصيد: {cashBalance.toLocaleString('ar-SA')}{' '}
+                            {farmSettings.currency}]
+                          </option>
+                          <option value="bank_account">
+                            الحساب البنكي الجاري - 10105 [الرصيد: {bankBalance.toLocaleString('ar-SA')}{' '}
+                            {farmSettings.currency}]
+                          </option>
+                        </select>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">
+                          العميل المستلم منه (الطرف المدين) *
+                        </label>
+                        <select
+                          required
+                          value={recCustomerId}
+                          onChange={(e) => {
+                            const cid = e.target.value;
+                            setRecCustomerId(cid);
+                            const cust = customers?.find((c) => c.id === cid);
+                            if (cust && (!recAmount || recAmount === 0)) {
+                              setRecAmount(cust.currentDebt > 0 ? cust.currentDebt : '');
+                            }
+                          }}
+                          className="w-full px-3.5 py-2.5 text-xs rounded-2xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 font-bold"
+                        >
+                          <option value="">-- اختر العميل من القائمة --</option>
+                          {customers?.map((c) => (
+                            <option key={c.id} value={c.id}>
+                              {c.name}{' '}
+                              {c.currentDebt > 0
+                                ? `(المديونية: ${c.currentDebt.toLocaleString()} ${farmSettings.currency})`
+                                : '(لا توجد ديون)'}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">
+                          جهة القبض والإيداع (مدين) *
+                        </label>
+                        <select
+                          value={recPaymentType}
+                          onChange={(e) => setRecPaymentType(e.target.value as any)}
+                          className="w-full px-3.5 py-2.5 text-xs rounded-2xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 font-bold"
+                        >
+                          <option value="cash">
+                            الصندوق الرئيسي (كاش) - 10101 [الرصيد: {cashBalance.toLocaleString('ar-SA')}{' '}
+                            {farmSettings.currency}]
+                          </option>
+                          <option value="bank">
+                            الحساب البنكي الجاري - 10105 [الرصيد: {bankBalance.toLocaleString('ar-SA')}{' '}
+                            {farmSettings.currency}]
+                          </option>
+                          <option value="kuraimi">محفظة الكريمي (حاسب / إم فلوس) - 10102</option>
+                          <option value="jeeb">محفظة جيب (Jeeb) - 10103</option>
+                          <option value="jawali">محفظة جوالي (Jawali) - 10104</option>
+                        </select>
+                      </div>
+                    </>
                   )}
                 </div>
-              )}
 
-              {/* Amount & Date */}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    المبلغ المستلم * ({farmSettings.currency})
-                  </label>
-                  <input
-                    type="number"
-                    min="1"
-                    step="any"
-                    required
-                    value={recAmount}
-                    onChange={(e) => setRecAmount(e.target.value === '' ? '' : Number(e.target.value))}
-                    placeholder="أدخل المبلغ المقبوض..."
-                    className="w-full px-3.5 py-2.5 text-xs rounded-2xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 font-bold"
-                  />
+                {/* Customer Debt Quick Badge (for Receipt) */}
+                {voucherType === 'receipt' && selectedCustomerInModal && (
+                  <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-between">
+                    <div>
+                      <span className="text-[11px] text-slate-500 block">المديونية المستحقة الحالية:</span>
+                      <span className="text-sm font-black text-rose-600 font-sans">
+                        {selectedCustomerInModal.currentDebt.toLocaleString('ar-SA')} {farmSettings.currency}
+                      </span>
+                    </div>
+                    {selectedCustomerInModal.currentDebt > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setRecAmount(selectedCustomerInModal.currentDebt)}
+                        className="px-3 py-1.5 rounded-xl bg-emerald-100 hover:bg-emerald-200 text-emerald-800 text-xs font-extrabold transition-all"
+                      >
+                        ⚡ سداد كامل الدين
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {/* 3. الحقول المخصصة تلقائياً (Conditional Fields) لتصنيف "شراء واستخدام أعلاف" */}
+                {isFeedExpense ? (
+                  <div className="p-4 rounded-2xl bg-emerald-50/70 border border-emerald-200 space-y-3">
+                    <div className="flex items-center justify-between text-xs font-extrabold text-emerald-950">
+                      <span className="flex items-center gap-1.5">
+                        <Package className="w-4 h-4 text-emerald-700" />
+                        تفاصيل شحنة وتوريد الأعلاف (ربط تلقائي مع المستودع ومتوسط التكلفة WAC)
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      {/* قائمة منسدلة لنوع العلف */}
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                          نوع العلف: *
+                        </label>
+                        <select
+                          value={feedType}
+                          onChange={(e) => {
+                            const selType = e.target.value as FeedType;
+                            setFeedType(selType);
+                            const st = feedStocks?.find((f) => f.feedType === selType);
+                            if (st && st.costPerBag) setFeedCostPerBag(st.costPerBag);
+                          }}
+                          className="w-full px-3 py-2 text-xs rounded-xl bg-white border border-emerald-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-bold"
+                        >
+                          <option value="starter_24_27">علف بادي (24-27% بروتين)</option>
+                          <option value="grower_fattening">علف نامي وتسمين (20-22% بروتين)</option>
+                          <option value="layer_production">علف بياض إنتاجي (20% بروتين)</option>
+                        </select>
+                        <span className="text-[10px] text-slate-500 mt-0.5 block">
+                          المتوفر بالمخزن: {currentFeedBags} كيس
+                        </span>
+                      </div>
+
+                      {/* حقل عدد الأكياس المشترية */}
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                          عدد الأكياس المشترية: *
+                        </label>
+                        <div className="relative">
+                          <input
+                            type="number"
+                            min="1"
+                            step="1"
+                            required
+                            value={feedBagsCount}
+                            onChange={(e) => {
+                              const val =
+                                e.target.value === '' ? '' : Math.max(1, Math.floor(Number(e.target.value)));
+                              setFeedBagsCount(val);
+                            }}
+                            className="w-full px-3 py-2 text-xs rounded-xl bg-white border border-emerald-300 text-center font-mono font-bold"
+                            placeholder="20"
+                          />
+                          <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400">
+                            كيس
+                          </span>
+                        </div>
+                        <span className="text-[10px] text-slate-500 mt-0.5 block">
+                          يعادل {feedWeightKg.toLocaleString('ar-SA')} كغم صافي
+                        </span>
+                      </div>
+
+                      {/* حقل سعر الكيس الواحد */}
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                          سعر الكيس الواحد: *
+                        </label>
+                        <div className="relative">
+                          <input
+                            type="number"
+                            min="1"
+                            step="100"
+                            required
+                            value={feedCostPerBag}
+                            onChange={(e) => {
+                              const val = e.target.value === '' ? '' : Math.max(0, Number(e.target.value));
+                              setFeedCostPerBag(val);
+                            }}
+                            className="w-full px-3 py-2 text-xs rounded-xl bg-white border border-emerald-300 text-center font-mono font-bold"
+                            placeholder="27000"
+                          />
+                          <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400">
+                            {farmSettings.currency}
+                          </span>
+                        </div>
+                        <span className="text-[10px] text-slate-500 mt-0.5 block">
+                          السعر السابق: {currentFeedCost.toLocaleString('ar-SA')} {farmSettings.currency}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* يتم حساب إجمالي المبلغ تلقائياً دون إمكانية للخطأ الحسابي */}
+                    <div className="p-3 rounded-xl bg-white/90 border border-emerald-300 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <Calculator className="w-5 h-5 text-emerald-700" />
+                        <div>
+                          <span className="text-xs font-black text-slate-800 block">
+                            إجمالي المبلغ المحسوب تلقائياً = (عدد الأكياس × سعر الكيس)
+                          </span>
+                          <span className="text-[10px] text-slate-500">
+                            الرصيد بعد التوريد: {predictedNewBags} كيس | متوسط التكلفة المرجح الجديد: {predictedNewWAC.toLocaleString('ar-SA')} {farmSettings.currency}/كيس
+                          </span>
+                        </div>
+                      </div>
+                      <div className="text-base font-black font-mono text-emerald-800 px-3 py-1 bg-emerald-100/70 rounded-xl">
+                        {calculatedFeedTotal.toLocaleString('ar-SA')} {farmSettings.currency}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  /* المبلغ العادي للمصروفات الأخرى أو سندات القبض */
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      {voucherType === 'expense' ? 'المبلغ المصروف *' : 'المبلغ المستلم *'} ({farmSettings.currency})
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        min="1"
+                        step="any"
+                        required
+                        value={voucherType === 'expense' ? expAmount : recAmount}
+                        onChange={(e) => {
+                          const val = e.target.value === '' ? '' : Number(e.target.value);
+                          if (voucherType === 'expense') setExpAmount(val);
+                          else setRecAmount(val);
+                        }}
+                        placeholder="أدخل المبلغ..."
+                        className="w-full px-3.5 py-2.5 text-xs rounded-2xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 font-bold"
+                      />
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">
+                        {farmSettings.currency}
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {/* 4. دقة التوثيق والمطابقة: رقم الفاتورة الورقية + البيان / المستلم */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center gap-1">
+                      <Receipt className="w-3.5 h-3.5 text-slate-500" />
+                      <span>رقم الفاتورة أو الإيصال الدفتري الورقي (تحقق سريع)</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={voucherManualRef}
+                      onChange={(e) => setVoucherManualRef(e.target.value)}
+                      placeholder="مثال: REC-1042 أو رقم الدفتر الورقي"
+                      className="w-full px-3.5 py-2.5 text-xs rounded-2xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 font-mono font-bold"
+                    />
+
+                    {/* نظام التحقق السريع والمطابقة مع الفواتير الورقية الموقعة */}
+                    {matchedInvoice ? (
+                      <div className="mt-1.5 p-2 rounded-xl bg-emerald-50 border border-emerald-200 text-[11px] text-emerald-950 flex items-center justify-between">
+                        <div className="flex items-center gap-1.5">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                          <span>
+                            <strong>فاتورة ورقية موقعة مطابقة:</strong> #{matchedInvoice.invoiceNumber}{' '}
+                            للعميل: <strong>{matchedInvoice.customerName}</strong>
+                            {matchedInvoice.remainingAmount
+                              ? ` (المتبقي: ${matchedInvoice.remainingAmount.toLocaleString('ar-SA')} ${farmSettings.currency})`
+                              : ''}
+                          </span>
+                        </div>
+                        {voucherType === 'receipt' && matchedInvoice.remainingAmount && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (matchedInvoice.customerId) setRecCustomerId(matchedInvoice.customerId);
+                              setRecAmount(matchedInvoice.remainingAmount || '');
+                            }}
+                            className="px-2 py-0.5 rounded-lg bg-emerald-200 hover:bg-emerald-300 text-emerald-950 font-black text-[10px]"
+                          >
+                            تحديد
+                          </button>
+                        )}
+                      </div>
+                    ) : voucherManualRef.trim() ? (
+                      <div className="mt-1.5 px-2.5 py-1 rounded-xl bg-slate-50 border border-slate-200 text-[10px] text-slate-600 flex items-center gap-1.5">
+                        <FileCheck className="w-3.5 h-3.5 text-slate-500" />
+                        <span>توثيق دفتري: سيتم ربط الرقم ({voucherManualRef.trim()}) بالسند المالي ودفتر اليومية.</span>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      {voucherType === 'expense' ? 'البيان والغرض من الصرف *' : 'البيان والملاحظات'}
+                    </label>
+                    <input
+                      type="text"
+                      required={voucherType === 'expense' && !isFeedExpense}
+                      value={voucherType === 'expense' ? expDescription : recNotes}
+                      onChange={(e) => {
+                        if (voucherType === 'expense') setExpDescription(e.target.value);
+                        else setRecNotes(e.target.value);
+                      }}
+                      placeholder={
+                        voucherType === 'expense'
+                          ? isFeedExpense
+                            ? 'توريد دفعة أعلاف للمستودع...'
+                            : 'بيان المصروف والغرض منه...'
+                          : 'مثال: تسديد دفعة من الحساب الآجل...'
+                      }
+                      className="w-full px-3.5 py-2.5 text-xs rounded-2xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                    />
+                  </div>
                 </div>
 
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    تاريخ السند *
-                  </label>
-                  <input
-                    type="date"
-                    required
-                    value={recDate}
-                    onChange={(e) => setRecDate(e.target.value)}
-                    className="w-full px-3.5 py-2.5 text-xs rounded-2xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 font-bold"
-                  />
-                </div>
-              </div>
+                {/* Recipient / Supplier for Expense */}
+                {voucherType === 'expense' && (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      اسم المستلم أو المورد (اختياري)
+                    </label>
+                    <input
+                      type="text"
+                      value={expRecipient}
+                      onChange={(e) => setExpRecipient(e.target.value)}
+                      placeholder="اسم المورد أو العامل المستلم للمبلغ..."
+                      className="w-full px-3.5 py-2.5 text-xs rounded-2xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-rose-500/20"
+                    />
+                  </div>
+                )}
 
-              {/* Payment Destination Account */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  طريقة القبض / الحساب المستلم (مدين) *
-                </label>
-                <select
-                  value={recPaymentType}
-                  onChange={(e) => setRecPaymentType(e.target.value as any)}
-                  className="w-full px-3.5 py-2.5 text-xs rounded-2xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 font-bold"
-                >
-                  <option value="cash">الصندوق الرئيسي (كاش) - 10101</option>
-                  <option value="kuraimi">محفظة الكريمي (حاسب / إم فلوس) - 10102</option>
-                  <option value="jeeb">محفظة جيب (Jeeb) - 10103</option>
-                  <option value="jawali">محفظة جوالي (Jawali) - 10104</option>
-                  <option value="bank">الحساب البنكي الجاري - 10105</option>
-                </select>
-              </div>
+                {/* 5. التحقق والتأكيد (Validation): تنبيه أحمر صريح عند عدم كفاية الرصيد */}
+                {isInsufficientBalance && (
+                  <div className="p-3.5 rounded-2xl bg-rose-50 border-2 border-rose-300 text-rose-950 space-y-1 animate-pulse">
+                    <div className="font-black text-xs flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                      <span>⚠️ تنبيه مالي صارم: رصيد {accountLabel} غير كافٍ!</span>
+                    </div>
+                    <div className="text-[11px] text-rose-800 leading-relaxed pr-6">
+                      الرصيد المتاح حالياً هو{' '}
+                      <strong className="font-mono text-rose-950">
+                        {availableBalance.toLocaleString('ar-SA')} {farmSettings.currency}
+                      </strong>{' '}
+                      بينما المبلغ المطلوب صرفه{' '}
+                      <strong className="font-mono text-rose-950">
+                        {effectiveAmount.toLocaleString('ar-SA')} {farmSettings.currency}
+                      </strong>{' '}
+                      (عجز بمقدار:{' '}
+                      <span className="font-mono font-bold text-rose-700">
+                        {balanceDeficit.toLocaleString('ar-SA')} {farmSettings.currency}
+                      </span>
+                      ).
+                      <br />
+                      يمنع النظام تسجيل سند صرف يتجاوز السيولة النقدية المتوفرة لحماية سلامة القيد المالي.
+                    </div>
+                  </div>
+                )}
 
-              {/* Notes */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  البيان والملاحظات
-                </label>
-                <input
-                  type="text"
-                  value={recNotes}
-                  onChange={(e) => setRecNotes(e.target.value)}
-                  placeholder="مثال: تسديد دفعة من الحساب الآجل - فاتورة رقم..."
-                  className="w-full px-3.5 py-2.5 text-xs rounded-2xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
-                />
-              </div>
+                {/* 6. الأثر المحاسبي التلقائي للقيد المزدوج المتوازن (Double-Entry Live Preview) */}
+                <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 text-xs space-y-2">
+                  <div className="flex items-center justify-between text-slate-700 font-extrabold text-[11px]">
+                    <div className="flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>الأثر المحاسبي التلقائي (القيد المزدوج المتوازن):</span>
+                    </div>
+                    <span className="font-mono font-black text-slate-900">
+                      {effectiveAmount.toLocaleString('ar-SA')} {farmSettings.currency}
+                    </span>
+                  </div>
 
-              {/* Accounting Effect Live Preview Alert */}
-              <div className="p-3 rounded-2xl bg-emerald-50/60 border border-emerald-200/80 text-[11px] text-emerald-900 space-y-1">
-                <div className="font-extrabold flex items-center gap-1.5">
-                  <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>الأثر المحاسبي التلقائي للقيد المزدوج:</span>
+                  <div className="space-y-1.5 text-[11px] font-mono border-t border-slate-200/70 pt-2">
+                    {voucherType === 'expense' ? (
+                      <>
+                        <div className="flex justify-between items-center text-rose-900 bg-rose-50/70 px-2.5 py-1.5 rounded-xl border border-rose-200/60">
+                          <span className="font-bold flex items-center gap-1.5 font-sans">
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-rose-200 text-rose-950 font-black">
+                              مدين Dr
+                            </span>
+                            حـ/{' '}
+                            {isFeedExpense
+                              ? 'مصروفات شراء واستخدام الأعلاف (50101)'
+                              : getCategoryLabel(expCategory)}
+                          </span>
+                          <span className="font-black font-sans">
+                            {effectiveAmount.toLocaleString('ar-SA')} {farmSettings.currency}
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center text-slate-800 bg-slate-100/70 px-2.5 py-1.5 rounded-xl border border-slate-200/60">
+                          <span className="font-bold flex items-center gap-1.5 font-sans">
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-200 text-slate-900 font-black">
+                              دائن Cr
+                            </span>
+                            حـ/{' '}
+                            {expPaidFrom === 'cash_box'
+                              ? 'الصندوق الرئيسي كاش (10101)'
+                              : 'الحساب البنكي الجاري (10105)'}
+                          </span>
+                          <span className="font-black font-sans">
+                            {effectiveAmount.toLocaleString('ar-SA')} {farmSettings.currency}
+                          </span>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="flex justify-between items-center text-emerald-900 bg-emerald-50/70 px-2.5 py-1.5 rounded-xl border border-emerald-200/60">
+                          <span className="font-bold flex items-center gap-1.5 font-sans">
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-200 text-emerald-950 font-black">
+                              مدين Dr
+                            </span>
+                            حـ/{' '}
+                            {recPaymentType === 'cash'
+                              ? 'الصندوق الرئيسي كاش (10101)'
+                              : recPaymentType === 'bank'
+                              ? 'الحساب البنكي الجاري (10105)'
+                              : 'المحفظة الإلكترونية'}
+                          </span>
+                          <span className="font-black font-sans">
+                            {effectiveAmount.toLocaleString('ar-SA')} {farmSettings.currency}
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center text-slate-800 bg-slate-100/70 px-2.5 py-1.5 rounded-xl border border-slate-200/60">
+                          <span className="font-bold flex items-center gap-1.5 font-sans">
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-200 text-slate-900 font-black">
+                              دائن Cr
+                            </span>
+                            حـ/ العملاء والذمم المدينة (10201) [تخفيض دين العميل]
+                          </span>
+                          <span className="font-black font-sans">
+                            {effectiveAmount.toLocaleString('ar-SA')} {farmSettings.currency}
+                          </span>
+                        </div>
+                      </>
+                    )}
+                  </div>
                 </div>
-                <div className="text-[10px] text-emerald-700 leading-relaxed">
-                  • من حـ/ {recPaymentType === 'cash' ? 'الصندوق الرئيسي (كاش)' : 'المحفظة / البنك'} [مدين: زيادة الأصول النقدية]
-                  <br />
-                  • إلى حـ/ العملاء والذمم المدينة [دائن: تخفيض دين العميل بمقدار المبلغ]
-                </div>
-              </div>
 
-              {/* Submit Button */}
-              <div className="pt-2 flex items-center gap-3">
-                <button
-                  type="submit"
-                  className="flex-1 py-2.5 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-extrabold text-xs shadow-apple transition-all"
-                >
-                  حفظ وترحيل سند القبض
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowAddReceiptModal(false)}
-                  className="px-4 py-2.5 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition-all"
-                >
-                  إلغاء
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================= */}
-      {/* 10. MODAL: سند صرف ومصروفات (Expense Voucher Modal) */}
-      {/* ========================================================= */}
-      {showAddExpenseModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-100 animate-scaleUp">
-            <div className="flex items-center justify-between pb-4 border-b border-slate-100 mb-5">
-              <div className="flex items-center gap-2">
-                <div className="w-9 h-9 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center">
-                  <ArrowUpRight className="w-5 h-5 stroke-[2.5]" />
+                {/* Footer Buttons */}
+                <div className="pt-2 flex items-center gap-3">
+                  <button
+                    type="submit"
+                    disabled={isVoucherSubmitting || effectiveAmount <= 0 || isInsufficientBalance}
+                    className={`flex-1 py-3 rounded-2xl text-white font-extrabold text-xs shadow-apple transition-all flex items-center justify-center gap-2 ${
+                      isInsufficientBalance
+                        ? 'bg-slate-400 cursor-not-allowed opacity-60'
+                        : voucherType === 'expense'
+                        ? 'bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-700 hover:to-amber-700'
+                        : 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700'
+                    }`}
+                  >
+                    {isInsufficientBalance ? (
+                      <span>⚠️ لا يمكن الحفظ - رصيد الخصم غير كافٍ</span>
+                    ) : isVoucherSubmitting ? (
+                      <span>جارِ الحفظ والترحيل المحاسبي...</span>
+                    ) : voucherType === 'expense' ? (
+                      <span>حفظ وترحيل سند الصرف ({effectiveAmount.toLocaleString('ar-SA')} {farmSettings.currency})</span>
+                    ) : (
+                      <span>حفظ وترحيل سند القبض ({effectiveAmount.toLocaleString('ar-SA')} {farmSettings.currency})</span>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCloseModal}
+                    className="px-5 py-3 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition-all"
+                  >
+                    إلغاء
+                  </button>
                 </div>
-                <div>
-                  <h3 className="text-base font-black text-slate-900">
-                    تسجيل سند صرف مالي (مصروفات تشغيلية)
-                  </h3>
-                  <p className="text-[11px] text-slate-500">
-                    إثبات المصروف في دفتر الأستاذ وخصمه مباشرة من حساب الصندوق.
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowAddExpenseModal(false)}
-                className="p-1 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-all"
-              >
-                <X className="w-5 h-5" />
-              </button>
+              </form>
             </div>
-
-            <form onSubmit={handleSaveExpense} className="space-y-4">
-              {/* Category & Date */}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    تصنيف المصروف *
-                  </label>
-                  <select
-                    value={expCategory}
-                    onChange={(e) => setExpCategory(e.target.value as any)}
-                    className="w-full px-3.5 py-2.5 text-xs rounded-2xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-rose-500/20 font-bold"
-                  >
-                    <option value="feed_purchase">🌾 شراء واستخدام أعلاف</option>
-                    <option value="packaging_bedding">🪵 نشارة خشب وأطباق تعبئة</option>
-                    <option value="utilities_maintenance">🔧 صيانة عنابر وأقفاص</option>
-                    <option value="salaries_advances">👥 رواتب وسلف العمال</option>
-                    <option value="delivery_petrol">⛽ بترول ومحروقات التوصيل</option>
-                    <option value="medications_vitamins">💊 أدوية وفيتامينات ولقاحات</option>
-                    <option value="electricity_water">💡 كهرباء ومياه وتشغيل</option>
-                    {customCategories?.map((c) => (
-                      <option key={c.id} value={c.name}>
-                        🏷️ {c.name}
-                      </option>
-                    ))}
-                    <option value="other">📦 مصروفات ونثريات أخرى</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    التاريخ *
-                  </label>
-                  <input
-                    type="date"
-                    required
-                    value={expDate}
-                    onChange={(e) => setExpDate(e.target.value)}
-                    className="w-full px-3.5 py-2.5 text-xs rounded-2xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-rose-500/20 font-bold"
-                  />
-                </div>
-              </div>
-
-              {/* Amount & Paid From Account */}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    المبلغ المصروف * ({farmSettings.currency})
-                  </label>
-                  <input
-                    type="number"
-                    min="1"
-                    step="any"
-                    required
-                    value={expAmount}
-                    onChange={(e) => setExpAmount(e.target.value === '' ? '' : Number(e.target.value))}
-                    placeholder="مثال: 15,000"
-                    className="w-full px-3.5 py-2.5 text-xs rounded-2xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-rose-500/20 font-bold"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    جهة الخصم (دائن) *
-                  </label>
-                  <select
-                    value={expPaidFrom}
-                    onChange={(e) => setExpPaidFrom(e.target.value as any)}
-                    className="w-full px-3.5 py-2.5 text-xs rounded-2xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-rose-500/20 font-bold"
-                  >
-                    <option value="cash_box">الصندوق الرئيسي (كاش) - 10101</option>
-                    <option value="bank_account">الحساب البنكي / المحفظة - 10105</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Description */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  البيان والغرض من الصرف *
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={expDescription}
-                  onChange={(e) => setExpDescription(e.target.value)}
-                  placeholder="مثال: شراء 10 أكياس علف بادي سمان 24%، أو صيانة دينمو الشفاط..."
-                  className="w-full px-3.5 py-2.5 text-xs rounded-2xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-rose-500/20"
-                />
-              </div>
-
-              {/* Recipient & Ref */}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    المستلم (اختياري)
-                  </label>
-                  <input
-                    type="text"
-                    value={expRecipient}
-                    onChange={(e) => setExpRecipient(e.target.value)}
-                    placeholder="اسم المورد أو العامل المستلم"
-                    className="w-full px-3.5 py-2.5 text-xs rounded-2xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-rose-500/20"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    رقم الفاتورة أو الإيصال (اختياري)
-                  </label>
-                  <input
-                    type="text"
-                    value={expRef}
-                    onChange={(e) => setExpRef(e.target.value)}
-                    placeholder="رقم الفاتورة الورقية"
-                    className="w-full px-3.5 py-2.5 text-xs rounded-2xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-rose-500/20 font-mono"
-                  />
-                </div>
-              </div>
-
-              {/* Accounting Live Preview */}
-              <div className="p-3 rounded-2xl bg-rose-50/60 border border-rose-200/80 text-[11px] text-rose-900 space-y-1">
-                <div className="font-extrabold flex items-center gap-1.5">
-                  <Sparkles className="w-3.5 h-3.5 text-rose-600" />
-                  <span>الأثر المحاسبي التلقائي للقيد المزدوج:</span>
-                </div>
-                <div className="text-[10px] text-rose-700 leading-relaxed">
-                  • من حـ/ {getCategoryLabel(expCategory)} [مدين: إثبات المصروف]
-                  <br />
-                  • إلى حـ/ {expPaidFrom === 'cash_box' ? 'الصندوق الرئيسي (كاش)' : 'الحساب البنكي'} [دائن: خصم وتخفيض رصيد النقدية]
-                </div>
-              </div>
-
-              {/* Submit Button */}
-              <div className="pt-2 flex items-center gap-3">
-                <button
-                  type="submit"
-                  className="flex-1 py-2.5 rounded-2xl bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-700 hover:to-amber-700 text-white font-extrabold text-xs shadow-apple transition-all"
-                >
-                  حفظ وترحيل سند الصرف
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowAddExpenseModal(false)}
-                  className="px-4 py-2.5 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition-all"
-                >
-                  إلغاء
-                </button>
-              </div>
-            </form>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* ========================================================= */}
       {/* 11. MODAL: تفاصيل الفاتورة ومعاينتها (Invoice Details Modal) */}
