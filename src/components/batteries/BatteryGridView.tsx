@@ -4,6 +4,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import type { Battery, BatteryTier } from '../../types';
 import { STRICT_ARABIC_BATTERY_ORDER } from '../../types';
 import { useToast } from '../../context/ToastContext';
+import { useAuth } from '../../context/AuthContext';
 import { calculateFlockAgeInfo } from '../../utils/birdAgeUtils';
 import {
   Grid,
@@ -26,6 +27,7 @@ import {
 
 export const BatteryGridView: React.FC = () => {
   const { toast } = useToast();
+  const { farmSettings } = useAuth();
 
   const batteries = useLiveQuery(() => db.batteries.toArray(), []);
   const tiers = useLiveQuery(() => db.tiers.toArray(), []);
@@ -227,10 +229,25 @@ export const BatteryGridView: React.FC = () => {
     if (!activeTierForEggs) return;
 
     const actual = Number(tierEggCount);
-    const broken = Number(tierBrokenEggs);
+    const broken = Math.max(0, Number(tierBrokenEggs) || 0);
+
+    if (!actual || isNaN(actual) || actual <= 0) {
+      toast('يرجى إدخال عدد صحيح للبيض المجموع أكبر من الصفر', 'error');
+      return;
+    }
+
+    if (broken > actual) {
+      toast(
+        `⚠️ عدد البيض المكسر المدخل (${broken}) لا يمكن أن يتجاوز إجمالي البيض المجموع (${actual})!`,
+        'error'
+      );
+      return;
+    }
+
     const marketable = Math.max(0, actual - broken);
     const females = activeTierForEggs.femalesCount;
     const layingRate = females > 0 ? (actual / females) * 100 : 0;
+    const currentTrayCapacity = farmSettings.defaultTrayCapacity || 18;
 
     const bat = batteries?.find((b) => b.id === activeTierForEggs.batteryId);
     const targetName = `بطارية ${bat?.name || ''} - الدور ${activeTierForEggs.tierNumber}`;
@@ -246,8 +263,8 @@ export const BatteryGridView: React.FC = () => {
       actualEggs: actual,
       brokenEggs: broken,
       marketableEggs: marketable,
-      packagedTraysCount: Math.floor(marketable / 30),
-      traySize: 30,
+      packagedTraysCount: Math.floor(marketable / currentTrayCapacity),
+      traySize: currentTrayCapacity,
       liveFemalesCount: females,
       layingRatePercent: Math.round(layingRate * 10) / 10,
       elapsedHoursFromLastCollection: 24,
@@ -257,7 +274,7 @@ export const BatteryGridView: React.FC = () => {
       systemRecordedAt: new Date().toISOString(),
     });
 
-    toast(`تم تسجيل إنتاج ${actual} بيضة للدور ${activeTierForEggs.tierNumber} بمعدل بياض ${Math.round(layingRate)}%!`, 'success');
+    toast(`تم تسجيل إنتاج ${actual} بيضة (الصافي: ${marketable} بيضة، مكسر: ${broken}) للدور ${activeTierForEggs.tierNumber} بمعدل بياض ${Math.round(layingRate)}%!`, 'success');
     setActiveTierForEggs(null);
     setTierEggCount(0);
     setTierBrokenEggs(0);

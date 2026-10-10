@@ -3,6 +3,7 @@ import { db } from '../../db';
 import { useLiveQuery } from 'dexie-react-hooks';
 import type { FloorRoom, RoomPurpose, RoomCategory } from '../../types';
 import { useToast } from '../../context/ToastContext';
+import { useAuth } from '../../context/AuthContext';
 import {
   Warehouse,
   Plus,
@@ -25,6 +26,7 @@ import { calculateFlockAgeInfo } from '../../utils/birdAgeUtils';
 
 export const RoomsView: React.FC = () => {
   const { toast } = useToast();
+  const { farmSettings } = useAuth();
   const rooms = useLiveQuery(() => db.rooms.toArray(), []);
 
   // Filter Tab
@@ -167,11 +169,26 @@ export const RoomsView: React.FC = () => {
     if (!activeRoomForEgg) return;
 
     const actual = Number(roomEggCount);
-    const broken = Number(roomBrokenEggs);
+    const broken = Math.max(0, Number(roomBrokenEggs) || 0);
+
+    if (!actual || isNaN(actual) || actual <= 0) {
+      toast('يرجى إدخال عدد صحيح للبيض المجموع أكبر من الصفر', 'error');
+      return;
+    }
+
+    if (broken > actual) {
+      toast(
+        `⚠️ عدد البيض المكسر المدخل (${broken}) لا يمكن أن يتجاوز إجمالي البيض المجموع (${actual})!`,
+        'error'
+      );
+      return;
+    }
+
     const net = Math.max(0, actual - broken);
     const females = activeRoomForEgg.femalesCount;
     const layingRate = females > 0 ? (actual / females) * 100 : 0;
-    const trays = Math.floor(net / 30);
+    const currentTrayCapacity = farmSettings.defaultTrayCapacity || 18;
+    const trays = Math.floor(net / currentTrayCapacity);
 
     await db.eggLogs.add({
       id: `egg-room-${Date.now()}`,
@@ -185,7 +202,7 @@ export const RoomsView: React.FC = () => {
       brokenEggs: broken,
       marketableEggs: net,
       packagedTraysCount: trays,
-      traySize: 30,
+      traySize: currentTrayCapacity,
       liveFemalesCount: females,
       layingRatePercent: Math.round(layingRate * 10) / 10,
       elapsedHoursFromLastCollection: 24,
@@ -195,7 +212,7 @@ export const RoomsView: React.FC = () => {
       systemRecordedAt: new Date().toISOString(),
     });
 
-    toast(`تم تسجيل إنتاج ${actual} بيضة (الصافي: ${net} بيضة) لـ (${activeRoomForEgg.name})!`, 'success');
+    toast(`تم تسجيل إنتاج ${actual} بيضة (الصافي: ${net} بيضة، مكسر: ${broken}) لـ (${activeRoomForEgg.name})!`, 'success');
     setActiveRoomForEgg(null);
     setRoomEggCount(0);
     setRoomBrokenEggs(0);

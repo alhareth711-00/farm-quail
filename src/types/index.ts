@@ -619,6 +619,7 @@ export interface FarmSettings {
   currency: string; // e.g. "ريال يمني", "ريال", "$"
   defaultTrayPrice?: number; // سعر بيع طبق البيض الافتراضي (تجزئة)
   defaultWholesaleTrayPrice?: number; // سعر بيع طبق البيض الافتراضي (جملة)
+  defaultTrayCapacity?: number; // سعة طبق البيض الافتراضي (18 بيضة لمعيار السوق اليمني)
   taxNumber?: string;
   receiptFooterMessage: string;
   managerPin: string;

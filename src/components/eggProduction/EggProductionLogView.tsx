@@ -105,9 +105,14 @@ export const EggProductionLogView: React.FC = () => {
     });
   }, [batteries]);
 
+  const lastLoadedDateRef = useRef<string | null>(null);
+
   // Load existing logs for the selected date to pre-populate the matrix
   useEffect(() => {
     if (!logs) return;
+    if (lastLoadedDateRef.current === entryDate) return;
+    lastLoadedDateRef.current = entryDate;
+
     const logsOnDate = logs.filter((l) => l.collectionDate === entryDate);
 
     const initialTierCounts: Record<string, number> = {};
@@ -176,13 +181,29 @@ export const EggProductionLogView: React.FC = () => {
       return;
     }
 
+    const inputBroken = Math.max(0, parseInt(String(totalBrokenEggs), 10) || 0);
+    if (inputBroken > grossTotalEggs) {
+      toast(
+        `⚠️ عدد البيض المكسر المدخل (${inputBroken}) أكبر من إجمالي البيض المجموع (${grossTotalEggs})!`,
+        'error'
+      );
+      return;
+    }
+
     setIsSaving(true);
     try {
-      const recordsToSave: EggProductionLog[] = [];
       const timestamp = new Date().toISOString();
 
-      // Distribute broken eggs proportionally across non-zero targets or place on first non-zero
-      let remainingBrokenToAllocate = Number(totalBrokenEggs);
+      // Gather candidate active locations with eggs > 0
+      interface TargetCandidate {
+        id: string;
+        targetType: 'tier' | 'room' | 'quarantine';
+        targetId: string;
+        targetName: string;
+        actualEggs: number;
+        females: number;
+      }
+      const candidates: TargetCandidate[] = [];
 
       // 1. Process Battery Tiers
       for (const bat of sortedBatteries) {
@@ -190,38 +211,13 @@ export const EggProductionLogView: React.FC = () => {
         for (const tier of batTiers) {
           const eggs = tierCounts[tier.id] || 0;
           if (eggs > 0) {
-            // Allocate broken portion
-            const brokenPortion =
-              grossTotalEggs > 0
-                ? Math.min(eggs, Math.round((eggs / grossTotalEggs) * Number(totalBrokenEggs)))
-                : 0;
-            remainingBrokenToAllocate -= brokenPortion;
-
-            const marketable = Math.max(0, eggs - brokenPortion);
-            const females = tier.femalesCount;
-            const layingRate = females > 0 ? (eggs / females) * 100 : 0;
-
-            recordsToSave.push({
+            candidates.push({
               id: `egg-tier-${tier.id}-${entryDate}`,
               targetType: 'tier',
               targetId: tier.id,
               targetName: `بطارية (${bat.name}) - الدور ${tier.tierNumber}`,
-              collectionDate: entryDate,
-              collectionTime: collectionTime,
-              session: 'evening', // فترة مسائية موحدة
               actualEggs: eggs,
-              brokenEggs: brokenPortion,
-              marketableEggs: marketable,
-              packagedTraysCount: Math.floor(marketable / traySize),
-              traySize: traySize,
-              liveFemalesCount: females,
-              layingRatePercent: Math.round(layingRate * 10) / 10,
-              elapsedHoursFromLastCollection: 24,
-              normalized24hYield: eggs,
-              hasIntervalWarning: false,
-              recordedBy: recordedBy,
-              systemRecordedAt: timestamp,
-              notes: entryNotes,
+              females: tier.femalesCount,
             });
           }
         }
@@ -232,53 +228,110 @@ export const EggProductionLogView: React.FC = () => {
         for (const room of rooms) {
           const eggs = roomCounts[room.id] || 0;
           if (eggs > 0) {
-            const brokenPortion =
-              grossTotalEggs > 0
-                ? Math.min(eggs, Math.round((eggs / grossTotalEggs) * Number(totalBrokenEggs)))
-                : 0;
-            remainingBrokenToAllocate -= brokenPortion;
-
-            const marketable = Math.max(0, eggs - brokenPortion);
-            const females = room.femalesCount;
-            const layingRate = females > 0 ? (eggs / females) * 100 : 0;
-
-            recordsToSave.push({
+            candidates.push({
               id: `egg-room-${room.id}-${entryDate}`,
               targetType: room.category === 'quarantine' ? 'quarantine' : 'room',
               targetId: room.id,
               targetName: `${room.name} (${room.purpose === 'layers' ? 'أمهات بياض' : room.purpose})`,
-              collectionDate: entryDate,
-              collectionTime: collectionTime,
-              session: 'evening', // فترة مسائية موحدة
               actualEggs: eggs,
-              brokenEggs: brokenPortion,
-              marketableEggs: marketable,
-              packagedTraysCount: Math.floor(marketable / traySize),
-              traySize: traySize,
-              liveFemalesCount: females,
-              layingRatePercent: Math.round(layingRate * 10) / 10,
-              elapsedHoursFromLastCollection: 24,
-              normalized24hYield: eggs,
-              hasIntervalWarning: false,
-              recordedBy: recordedBy,
-              systemRecordedAt: timestamp,
-              notes: entryNotes,
+              females: room.femalesCount,
             });
           }
         }
       }
 
-      // Save / Overwrite in Dexie for the day
+      if (candidates.length === 0) {
+        toast('لا توجد أي كميات إنتاج مدخلة للحفظ', 'error');
+        setIsSaving(false);
+        return;
+      }
+
+      // Distribute broken eggs with exact integer precision using Largest Remainder Method (Hamilton Algorithm)
+      // This mathematically guarantees that sum(brokenEggs) === inputBroken with 0 discrepancy!
+      const allocations = candidates.map((c, index) => {
+        const rawQuota = grossTotalEggs > 0 ? (c.actualEggs / grossTotalEggs) * inputBroken : 0;
+        const base = Math.min(c.actualEggs, Math.floor(rawQuota));
+        const remainder = rawQuota - Math.floor(rawQuota);
+        return { index, candidate: c, base, remainder, allocated: base };
+      });
+
+      let currentAllocated = allocations.reduce((sum, a) => sum + a.allocated, 0);
+      let surplusToDistribute = inputBroken - currentAllocated;
+
+      // Sort by remainder descending to give +1 to targets with largest remainder
+      const sortedByRemainder = [...allocations].sort((a, b) => {
+        if (b.remainder !== a.remainder) return b.remainder - a.remainder;
+        return b.candidate.actualEggs - a.candidate.actualEggs;
+      });
+
+      for (const item of sortedByRemainder) {
+        if (surplusToDistribute <= 0) break;
+        if (item.allocated < item.candidate.actualEggs) {
+          item.allocated += 1;
+          surplusToDistribute -= 1;
+        }
+      }
+
+      // Fallback if surplus still remains
+      if (surplusToDistribute > 0) {
+        for (const item of allocations) {
+          if (surplusToDistribute <= 0) break;
+          const capacity = item.candidate.actualEggs - item.allocated;
+          if (capacity > 0) {
+            const add = Math.min(surplusToDistribute, capacity);
+            item.allocated += add;
+            surplusToDistribute -= add;
+          }
+        }
+      }
+
+      // Build records to save
+      const recordsToSave: EggProductionLog[] = allocations.map((item) => {
+        const c = item.candidate;
+        const brokenPortion = item.allocated;
+        const marketable = Math.max(0, c.actualEggs - brokenPortion);
+        const females = c.females;
+        const layingRate = females > 0 ? (c.actualEggs / females) * 100 : 0;
+
+        return {
+          id: c.id,
+          targetType: c.targetType,
+          targetId: c.targetId,
+          targetName: c.targetName,
+          collectionDate: entryDate,
+          collectionTime: collectionTime,
+          session: 'evening',
+          actualEggs: c.actualEggs,
+          brokenEggs: brokenPortion,
+          marketableEggs: marketable,
+          packagedTraysCount: Math.floor(marketable / traySize),
+          traySize: traySize,
+          liveFemalesCount: females,
+          layingRatePercent: Math.round(layingRate * 10) / 10,
+          elapsedHoursFromLastCollection: 24,
+          normalized24hYield: c.actualEggs,
+          hasIntervalWarning: false,
+          recordedBy: recordedBy,
+          systemRecordedAt: timestamp,
+          notes: entryNotes,
+        };
+      });
+
+      // Clear existing records for this day first to prevent orphan/ghost entries
+      await db.eggLogs.where('collectionDate').equals(entryDate).delete();
       await db.eggLogs.bulkPut(recordsToSave);
+
+      // Keep lastLoadedDateRef in sync so it won't trigger re-population wipe
+      lastLoadedDateRef.current = entryDate;
 
       // --- Transfer to Egg Warehouse & Batches (ترحيل الأقفاص والمفرد للمخزن وتطبيق FIFO) ---
       const todayPackagedCount = Math.floor(netMarketableEggs / traySize);
       const todayLooseCount = netMarketableEggs % traySize;
 
       // 1. Transfer today's packaged cages
+      const batchId = `eb-prod-${entryDate}`;
+      const existingBatch = await db.eggBatches.get(batchId);
       if (todayPackagedCount > 0) {
-        const batchId = `eb-prod-${entryDate}`;
-        const existingBatch = await db.eggBatches.get(batchId);
         if (existingBatch) {
           await db.eggBatches.update(batchId, {
             initialCagesCount: todayPackagedCount,
@@ -303,6 +356,8 @@ export const EggProductionLogView: React.FC = () => {
             updatedAt: timestamp,
           });
         }
+      } else if (existingBatch) {
+        await db.eggBatches.delete(batchId);
       }
 
       // 2. Transfer loose eggs with accumulation and auto-conversion upon reaching 18 eggs
