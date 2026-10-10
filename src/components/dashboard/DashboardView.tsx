@@ -1,8 +1,10 @@
-import React from 'react';
+import React, { useState, useMemo } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { db } from '../../db';
 import { useLiveQuery } from 'dexie-react-hooks';
 import type { NavTab } from '../layout/Sidebar';
+import type { BroodingWeeklyRate } from '../../types';
+import { DEFAULT_BROODING_RATES } from '../../types';
 import {
   Egg,
   TrendingUp,
@@ -25,6 +27,18 @@ import {
   ArrowDownRight,
   ArrowUp,
   ArrowDown,
+  Wheat,
+  Scale,
+  Utensils,
+  PieChart,
+  Activity,
+  Check,
+  Layers,
+  Info,
+  X,
+  Flame,
+  Wind,
+  Baby,
 } from 'lucide-react';
 
 interface DashboardViewProps {
@@ -36,10 +50,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
 
   const today = new Date();
   const todayStr = today.toISOString().split('T')[0];
+  const currentMonthStr = todayStr.slice(0, 7);
+  const currentDayOfMonth = today.getDate();
 
   const yesterday = new Date(today);
   yesterday.setDate(yesterday.getDate() - 1);
   const yesterdayStr = yesterday.toISOString().split('T')[0];
+
+  // Feed Analytics Modal State
+  const [showFeedAnalyticsModal, setShowFeedAnalyticsModal] = useState(false);
+  const [feedTimeframe, setFeedTimeframe] = useState<'today' | 'month'>('today');
 
   // Live queries from IndexedDB
   const batteries = useLiveQuery(() => db.batteries.toArray(), []);
@@ -49,6 +69,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   const incubations = useLiveQuery(() => db.incubationBatches.toArray(), []);
   const invoices = useLiveQuery(() => db.invoices.toArray(), []);
   const expenses = useLiveQuery(() => db.expenses.toArray(), []);
+  const feedStocks = useLiveQuery(() => db.feedStock.toArray(), []);
+  const feedConsumptions = useLiveQuery(() => db.feedConsumption.toArray(), []);
+  const broodingBatches = useLiveQuery(() => db.broodingBatches.toArray(), []);
+  const feedScheduleSetting = useLiveQuery(() => db.settings.get('broodingFeedSchedule'), []);
   const activeWithdrawals = useLiveQuery(
     () =>
       db.medicationSchedules
@@ -118,6 +142,166 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   // Active incubations
   const activeIncubationsList =
     incubations?.filter((b) => b.status === 'incubating' || b.status === 'candled') || [];
+
+  // --- Feed Consumption & Financial Analytics Calculations ---
+  const activeRates: BroodingWeeklyRate[] = useMemo(() => {
+    if (feedScheduleSetting?.value?.rates && Array.isArray(feedScheduleSetting.value.rates)) {
+      return feedScheduleSetting.value.rates;
+    }
+    return DEFAULT_BROODING_RATES;
+  }, [feedScheduleSetting]);
+
+  const getGramsPerChickForAge = (ageDays: number, rates: BroodingWeeklyRate[]): number => {
+    if (ageDays <= 7) return rates.find((r) => r.weekNumber === 1)?.defaultGramsPerChickDay ?? 6.5;
+    if (ageDays <= 14) return rates.find((r) => r.weekNumber === 2)?.defaultGramsPerChickDay ?? 12.0;
+    if (ageDays <= 21) return rates.find((r) => r.weekNumber === 3)?.defaultGramsPerChickDay ?? 16.5;
+    if (ageDays <= 28) return rates.find((r) => r.weekNumber === 4)?.defaultGramsPerChickDay ?? 21.0;
+    return rates.find((r) => r.weekNumber === 5)?.defaultGramsPerChickDay ?? 25.0;
+  };
+
+  // Feed Stock Info
+  const starterStock = feedStocks?.find((f) => f.feedType === 'starter_24_27');
+  const starterCostPerBag = starterStock?.costPerBag || 29000;
+  const starterBagWeight = starterStock?.bagWeightKg || 50;
+  const starterCostPerKg = starterCostPerBag / starterBagWeight;
+  const starterAvailableBags = starterStock?.bagsCount || 0;
+
+  const growerStock = feedStocks?.find((f) => f.feedType === 'grower_fattening');
+  const growerCostPerBag = growerStock?.costPerBag || 27000;
+  const growerBagWeight = growerStock?.bagWeightKg || 50;
+  const growerCostPerKg = growerCostPerBag / growerBagWeight;
+  const growerAvailableBags = growerStock?.bagsCount || 0;
+
+  const layerStock = feedStocks?.find((f) => f.feedType === 'layer_production');
+  const layerCostPerBag = layerStock?.costPerBag || 25500;
+  const layerBagWeight = layerStock?.bagWeightKg || 50;
+  const layerCostPerKg = layerCostPerBag / layerBagWeight;
+  const layerAvailableBags = layerStock?.bagsCount || 0;
+
+  // 1. Starter Flock & Rates (Phase 1 brooding: 1-21 days)
+  const phase1Brood = broodingBatches?.filter((b) => {
+    if (b.status !== 'active') return false;
+    const age = Math.max(1, Math.floor((today.getTime() - new Date(b.hatchDate).getTime()) / (1000 * 60 * 60 * 24)) + 1);
+    return age <= 21;
+  }) || [];
+  const p1ChicksCount = phase1Brood.reduce((acc, b) => acc + b.currentChicksCount, 0);
+
+  const p1EstimatedDailyKg = phase1Brood.reduce((acc, b) => {
+    const age = Math.max(1, Math.floor((today.getTime() - new Date(b.hatchDate).getTime()) / (1000 * 60 * 60 * 24)) + 1);
+    const g = getGramsPerChickForAge(age, activeRates);
+    return acc + (b.currentChicksCount * g) / 1000;
+  }, 0);
+  const p1EstimatedDailyCost = p1EstimatedDailyKg * starterCostPerKg;
+  const p1EstimatedDailyBags = p1EstimatedDailyKg / starterBagWeight;
+
+  const starterTodayLogs = feedConsumptions?.filter((c) => c.date === todayStr && c.feedType === 'starter_24_27') || [];
+  const starterKgLoggedToday = starterTodayLogs.reduce((a, c) => a + c.kgUsed, 0);
+  const starterCostLoggedToday = starterTodayLogs.reduce((a, c) => a + (c.costAmount || c.kgUsed * starterCostPerKg), 0);
+  const starterBagsLoggedToday = starterTodayLogs.reduce((a, c) => a + c.bagsUsed, 0);
+
+  const p1KgToday = starterKgLoggedToday > 0 ? starterKgLoggedToday : Math.round(p1EstimatedDailyKg * 10) / 10;
+  const p1CostToday = starterCostLoggedToday > 0 ? starterCostLoggedToday : Math.round(p1EstimatedDailyCost);
+  const p1BagsToday = starterBagsLoggedToday > 0 ? starterBagsLoggedToday : Math.round(p1EstimatedDailyBags * 100) / 100;
+
+  const starterMonthLogs = feedConsumptions?.filter((c) => c.date.startsWith(currentMonthStr) && c.feedType === 'starter_24_27') || [];
+  const p1KgMonth = starterMonthLogs.length > 0
+    ? starterMonthLogs.reduce((a, c) => a + c.kgUsed, 0)
+    : Math.round(p1EstimatedDailyKg * currentDayOfMonth * 10) / 10;
+  const p1CostMonth = starterMonthLogs.length > 0
+    ? starterMonthLogs.reduce((a, c) => a + (c.costAmount || c.kgUsed * starterCostPerKg), 0)
+    : Math.round(p1EstimatedDailyCost * currentDayOfMonth);
+  const p1BagsMonth = Math.round((p1KgMonth / starterBagWeight) * 100) / 100;
+
+  // 2. Grower Flock & Rates (Phase 2 brooding 22-38 days + Fattening meat birds)
+  const phase2Brood = broodingBatches?.filter((b) => {
+    if (b.status !== 'active') return false;
+    const age = Math.max(1, Math.floor((today.getTime() - new Date(b.hatchDate).getTime()) / (1000 * 60 * 60 * 24)) + 1);
+    return age > 21;
+  }) || [];
+  const p2ChicksCount = phase2Brood.reduce((acc, b) => acc + b.currentChicksCount, 0);
+  const fatteningBirdsCount = rooms?.filter((r) => r.purpose === 'fattening').reduce((acc, r) => acc + r.malesCount + r.femalesCount, 0) || 0;
+  const totalGrowerBirds = p2ChicksCount + fatteningBirdsCount;
+
+  const p2BroodKg = phase2Brood.reduce((acc, b) => {
+    const age = Math.max(1, Math.floor((today.getTime() - new Date(b.hatchDate).getTime()) / (1000 * 60 * 60 * 24)) + 1);
+    const g = getGramsPerChickForAge(age, activeRates);
+    return acc + (b.currentChicksCount * g) / 1000;
+  }, 0);
+  const fatteningKg = (fatteningBirdsCount * 26) / 1000;
+  const growerEstimatedDailyKg = p2BroodKg + fatteningKg;
+  const growerEstimatedDailyCost = growerEstimatedDailyKg * growerCostPerKg;
+  const growerEstimatedDailyBags = growerEstimatedDailyKg / growerBagWeight;
+
+  const growerTodayLogs = feedConsumptions?.filter((c) => c.date === todayStr && c.feedType === 'grower_fattening') || [];
+  const growerKgLoggedToday = growerTodayLogs.reduce((a, c) => a + c.kgUsed, 0);
+  const growerCostLoggedToday = growerTodayLogs.reduce((a, c) => a + (c.costAmount || c.kgUsed * growerCostPerKg), 0);
+  const growerBagsLoggedToday = growerTodayLogs.reduce((a, c) => a + c.bagsUsed, 0);
+
+  const growerKgToday = growerKgLoggedToday > 0 ? growerKgLoggedToday : Math.round(growerEstimatedDailyKg * 10) / 10;
+  const growerCostToday = growerCostLoggedToday > 0 ? growerCostLoggedToday : Math.round(growerEstimatedDailyCost);
+  const growerBagsToday = growerBagsLoggedToday > 0 ? growerBagsLoggedToday : Math.round(growerEstimatedDailyBags * 100) / 100;
+
+  const growerMonthLogs = feedConsumptions?.filter((c) => c.date.startsWith(currentMonthStr) && c.feedType === 'grower_fattening') || [];
+  const growerKgMonth = growerMonthLogs.length > 0
+    ? growerMonthLogs.reduce((a, c) => a + c.kgUsed, 0)
+    : Math.round(growerEstimatedDailyKg * currentDayOfMonth * 10) / 10;
+  const growerCostMonth = growerMonthLogs.length > 0
+    ? growerMonthLogs.reduce((a, c) => a + (c.costAmount || c.kgUsed * growerCostPerKg), 0)
+    : Math.round(growerEstimatedDailyCost * currentDayOfMonth);
+  const growerBagsMonth = Math.round((growerKgMonth / growerBagWeight) * 100) / 100;
+
+  // 3. Layer Flock & Rates (Laying females standard 30g/day)
+  const layerEstimatedDailyKg = (totalLayingHens * 30) / 1000;
+  const layerEstimatedDailyCost = layerEstimatedDailyKg * layerCostPerKg;
+  const layerEstimatedDailyBags = layerEstimatedDailyKg / layerBagWeight;
+
+  const layerTodayLogs = feedConsumptions?.filter((c) => c.date === todayStr && c.feedType === 'layer_production') || [];
+  const layerKgLoggedToday = layerTodayLogs.reduce((a, c) => a + c.kgUsed, 0);
+  const layerCostLoggedToday = layerTodayLogs.reduce((a, c) => a + (c.costAmount || c.kgUsed * layerCostPerKg), 0);
+  const layerBagsLoggedToday = layerTodayLogs.reduce((a, c) => a + c.bagsUsed, 0);
+
+  const layerKgToday = layerKgLoggedToday > 0 ? layerKgLoggedToday : Math.round(layerEstimatedDailyKg * 10) / 10;
+  const layerCostToday = layerCostLoggedToday > 0 ? layerCostLoggedToday : Math.round(layerEstimatedDailyCost);
+  const layerBagsToday = layerBagsLoggedToday > 0 ? layerBagsLoggedToday : Math.round(layerEstimatedDailyBags * 100) / 100;
+
+  const layerMonthLogs = feedConsumptions?.filter((c) => c.date.startsWith(currentMonthStr) && c.feedType === 'layer_production') || [];
+  const layerKgMonth = layerMonthLogs.length > 0
+    ? layerMonthLogs.reduce((a, c) => a + c.kgUsed, 0)
+    : Math.round(layerEstimatedDailyKg * currentDayOfMonth * 10) / 10;
+  const layerCostMonth = layerMonthLogs.length > 0
+    ? layerMonthLogs.reduce((a, c) => a + (c.costAmount || c.kgUsed * layerCostPerKg), 0)
+    : Math.round(layerEstimatedDailyCost * currentDayOfMonth);
+  const layerBagsMonth = Math.round((layerKgMonth / layerBagWeight) * 100) / 100;
+
+  // Overall Totals
+  const totalFeedKgToday = Math.round((p1KgToday + growerKgToday + layerKgToday) * 10) / 10;
+  const totalFeedCostToday = p1CostToday + growerCostToday + layerCostToday;
+  const totalFeedBagsToday = Math.round((p1BagsToday + growerBagsToday + layerBagsToday) * 100) / 100;
+
+  const totalFeedKgMonth = Math.round((p1KgMonth + growerKgMonth + layerKgMonth) * 10) / 10;
+  const totalFeedCostMonth = p1CostMonth + growerCostMonth + layerCostMonth;
+  const totalFeedBagsMonth = Math.round((p1BagsMonth + growerBagsMonth + layerBagsMonth) * 100) / 100;
+
+  // Financial Returns Comparison (العائد مقابل تكلفة الأعلاف)
+  const defaultTrayPrice = farmSettings.defaultTrayPrice || 900;
+  const estimatedEggRevenueToday = Math.round((todayNetEggs / 30) * defaultTrayPrice);
+  const recordedSalesToday = todayRevenue;
+  const totalDailyEstimatedGrossRevenue =
+    estimatedEggRevenueToday + (recordedSalesToday > estimatedEggRevenueToday ? recordedSalesToday - estimatedEggRevenueToday : 0);
+  const dailyFeedMargin = totalDailyEstimatedGrossRevenue - totalFeedCostToday;
+  const feedCostRatioPct = totalDailyEstimatedGrossRevenue > 0
+    ? Math.round((totalFeedCostToday / totalDailyEstimatedGrossRevenue) * 100)
+    : 0;
+
+  // Monthly returns for feed comparison
+  const monthInvoices = invoices?.filter((inv) => inv.date.startsWith(currentMonthStr)) || [];
+  const monthRevenue = monthInvoices.reduce((acc, inv) => acc + inv.totalAmount, 0);
+  const monthEggRevenue = Math.round(estimatedEggRevenueToday * currentDayOfMonth);
+  const totalMonthEstimatedGrossRevenue = monthEggRevenue + (monthRevenue > monthEggRevenue ? (monthRevenue - monthEggRevenue) : 0);
+  const monthFeedMargin = totalMonthEstimatedGrossRevenue - totalFeedCostMonth;
+  const monthFeedCostRatioPct = totalMonthEstimatedGrossRevenue > 0
+    ? Math.round((totalFeedCostMonth / totalMonthEstimatedGrossRevenue) * 100)
+    : 0;
 
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-6 animate-fadeIn">
@@ -274,18 +458,40 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
         </div>
 
         {/* Card 3: Total Living Flock */}
-        <div className="p-5 rounded-3xl glass-card relative overflow-hidden">
+        <div className="p-5 rounded-3xl glass-card relative overflow-hidden group">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-bold text-slate-500">إجمالي قطيع المزرعة الحي</span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-slate-500">إجمالي قطيع المزرعة الحي</span>
+              <button
+                type="button"
+                onClick={() => setShowFeedAnalyticsModal(true)}
+                className="px-2.5 py-1 rounded-xl bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-900 text-[11px] font-black flex items-center gap-1.5 transition-all shadow-xs cursor-pointer hover:scale-105 active:scale-95"
+                title="تحليل استهلاك وتكاليف الأعلاف للقطيع 🌾"
+              >
+                <Wheat className="w-3.5 h-3.5 text-amber-600 animate-pulse" />
+                <span>تحليل الأعلاف 🌾</span>
+              </button>
+            </div>
             <div className="w-10 h-10 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
               <Bird className="w-5 h-5" />
             </div>
           </div>
-          <div className="flex items-baseline gap-2">
-            <span className="text-3xl font-black text-slate-900 font-mono">
-              {totalFlockBirds.toLocaleString('ar-SA')}
-            </span>
-            <span className="text-xs font-bold text-slate-400">طائر سمان</span>
+          <div className="flex items-baseline justify-between">
+            <div className="flex items-baseline gap-2">
+              <span className="text-3xl font-black text-slate-900 font-mono">
+                {totalFlockBirds.toLocaleString('ar-SA')}
+              </span>
+              <span className="text-xs font-bold text-slate-400">طائر سمان</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowFeedAnalyticsModal(true)}
+              className="text-[11px] font-bold text-amber-700 bg-amber-50 hover:bg-amber-100 px-2 py-0.5 rounded-lg border border-amber-200/60 flex items-center gap-1 transition-colors"
+              title="انقر لفتح تفاصيل استهلاك وتكاليف الأعلاف"
+            >
+              <Utensils className="w-3 h-3 text-amber-600" />
+              <span>{Math.round(totalFeedKgToday)} كغم علف/يوم</span>
+            </button>
           </div>
           <div className="mt-3 flex items-center justify-between text-[11px] text-slate-500 pt-2 border-t border-slate-100">
             <span>البطاريات (15): <b>{totalBatteryBirds}</b></span>
@@ -616,6 +822,412 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
           </div>
         </div>
       </div>
+
+      {/* Modal: تحليل استهلاك وتكاليف الأعلاف للقطيع */}
+      {showFeedAnalyticsModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fadeIn" dir="rtl">
+          <div className="bg-white rounded-3xl max-w-4xl w-full max-h-[92vh] overflow-y-auto shadow-2xl border border-slate-100 flex flex-col">
+            {/* Modal Header */}
+            <div className="p-6 border-b border-slate-100 bg-gradient-to-r from-amber-500/10 via-emerald-500/10 to-teal-500/10 flex items-start justify-between gap-4 sticky top-0 bg-white/95 backdrop-blur-xs z-10">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-amber-500 text-white flex items-center justify-center shadow-md shadow-amber-200">
+                  <Wheat className="w-6 h-6" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-xl font-black text-slate-900">تحليل استهلاك وتكاليف الأعلاف للقطيع</h3>
+                    <span className="text-[10px] font-black bg-amber-100 text-amber-800 px-2.5 py-0.5 rounded-full border border-amber-200">
+                      🌾 منظومة التغذية الذكية
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-1">
+                    تحليل تفصيلي لاستهلاك وتكاليف الأعلاف اليومية والشهرية مع مؤشرات الكفاءة الاقتصادية والعائد
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3 shrink-0">
+                {/* Timeframe Switcher */}
+                <div className="bg-slate-100 p-1 rounded-2xl flex items-center text-xs font-bold border border-slate-200/80">
+                  <button
+                    type="button"
+                    onClick={() => setFeedTimeframe('today')}
+                    className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer ${
+                      feedTimeframe === 'today'
+                        ? 'bg-white text-emerald-800 shadow-xs font-extrabold'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <Calendar className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>استهلاك اليوم</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFeedTimeframe('month')}
+                    className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer ${
+                      feedTimeframe === 'month'
+                        ? 'bg-white text-emerald-800 shadow-xs font-extrabold'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <PieChart className="w-3.5 h-3.5 text-teal-600" />
+                    <span>الشهر الحالي</span>
+                  </button>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setShowFeedAnalyticsModal(false)}
+                  className="w-10 h-10 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center transition-colors cursor-pointer"
+                  title="إغلاق"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 space-y-6">
+              {/* Financial Efficiency & Returns Comparison */}
+              <div className="p-5 rounded-3xl bg-gradient-to-br from-emerald-900 via-teal-900 to-slate-900 text-white shadow-lg space-y-4 relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-64 h-64 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none" />
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-white/10 pb-3 relative z-10">
+                  <div className="flex items-center gap-2">
+                    <div className="p-2 rounded-xl bg-emerald-500/20 text-emerald-300">
+                      <Scale className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h4 className="font-black text-sm text-white">مقارنة الكفاءة المالية: العائد مقابل تكلفة العلف</h4>
+                      <p className="text-[11px] text-emerald-200/80">
+                        {feedTimeframe === 'today'
+                          ? 'مقارنة الإنفاق على الأعلاف اليومية مقابل إيرادات إنتاج البيض والمبيعات المحققة'
+                          : `المؤشرات التراكمية لشهر ${currentMonthStr} مقابل مبيعات وإنتاج الشهر`}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] font-bold text-slate-300">نسبة تكلفة العلف من العائد:</span>
+                    <span className={`px-2.5 py-0.5 rounded-full font-mono text-xs font-black ${
+                      (feedTimeframe === 'today' ? feedCostRatioPct : monthFeedCostRatioPct) <= 50
+                        ? 'bg-emerald-400/20 text-emerald-300 border border-emerald-400/30'
+                        : 'bg-amber-400/20 text-amber-300 border border-amber-400/30'
+                    }`}>
+                      {feedTimeframe === 'today' ? feedCostRatioPct : monthFeedCostRatioPct}%
+                    </span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 relative z-10">
+                  {/* Total Feed Cost */}
+                  <div className="p-3.5 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-xs">
+                    <span className="text-[11px] text-slate-300 block mb-1">
+                      {feedTimeframe === 'today' ? 'إجمالي تكلفة العلف اليوم' : 'إجمالي تكلفة العلف الشهرية'}
+                    </span>
+                    <div className="flex items-baseline gap-1.5 font-mono">
+                      <span className="text-xl font-black text-amber-300">
+                        {(feedTimeframe === 'today' ? totalFeedCostToday : totalFeedCostMonth).toLocaleString('ar-SA')}
+                      </span>
+                      <span className="text-[10px] text-slate-300">ر.ي</span>
+                    </div>
+                    <span className="text-[10px] text-slate-400 mt-1 block">
+                      يعادل {(feedTimeframe === 'today' ? totalFeedKgToday : totalFeedKgMonth).toLocaleString('ar-SA')} كغم ({(feedTimeframe === 'today' ? totalFeedBagsToday : totalFeedBagsMonth)} كيس)
+                    </span>
+                  </div>
+
+                  {/* Estimated Gross Revenue */}
+                  <div className="p-3.5 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-xs">
+                    <span className="text-[11px] text-slate-300 block mb-1">
+                      {feedTimeframe === 'today' ? 'العائد التقديري للإنتاج اليوم' : 'إجمالي عائد الإنتاج والمبيعات'}
+                    </span>
+                    <div className="flex items-baseline gap-1.5 font-mono">
+                      <span className="text-xl font-black text-emerald-300">
+                        {(feedTimeframe === 'today' ? totalDailyEstimatedGrossRevenue : totalMonthEstimatedGrossRevenue).toLocaleString('ar-SA')}
+                      </span>
+                      <span className="text-[10px] text-slate-300">ر.ي</span>
+                    </div>
+                    <span className="text-[10px] text-slate-400 mt-1 block">
+                      {feedTimeframe === 'today'
+                        ? `إنتاج: ${todayNetEggs} بيضة (${Math.round((todayNetEggs / 30) * 10) / 10} طبق)`
+                        : `مبيعات مسجلة: ${monthRevenue.toLocaleString('ar-SA')} ر.ي`}
+                    </span>
+                  </div>
+
+                  {/* Feed Net Margin */}
+                  <div className="p-3.5 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-xs">
+                    <span className="text-[11px] text-slate-300 block mb-1">
+                      {feedTimeframe === 'today' ? 'هامش ربح العلف اليومي' : 'هامش ربح العلف الشهري'}
+                    </span>
+                    <div className="flex items-baseline gap-1.5 font-mono">
+                      <span className={`text-xl font-black ${
+                        (feedTimeframe === 'today' ? dailyFeedMargin : monthFeedMargin) >= 0 ? 'text-teal-300' : 'text-rose-300'
+                      }`}>
+                        {(feedTimeframe === 'today' ? dailyFeedMargin : monthFeedMargin).toLocaleString('ar-SA')}
+                      </span>
+                      <span className="text-[10px] text-slate-300">ر.ي</span>
+                    </div>
+                    <span className="text-[10px] text-emerald-300/80 mt-1 flex items-center gap-1">
+                      <TrendingUp className="w-3 h-3 text-emerald-400" />
+                      {(feedTimeframe === 'today' ? dailyFeedMargin : monthFeedMargin) >= 0 ? 'عائد إيجابي بعد تكلفة العلف' : 'تكلفة العلف تفوق الإيراد الحالي'}
+                    </span>
+                  </div>
+
+                  {/* Flock Total Fed */}
+                  <div className="p-3.5 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-xs">
+                    <span className="text-[11px] text-slate-300 block mb-1">إجمالي القطيع المتغذّي</span>
+                    <div className="flex items-baseline gap-1.5 font-mono">
+                      <span className="text-xl font-black text-white">
+                        {(p1ChicksCount + totalGrowerBirds + totalLayingHens).toLocaleString('ar-SA')}
+                      </span>
+                      <span className="text-[10px] text-slate-300">طائر/صوص</span>
+                    </div>
+                    <span className="text-[10px] text-slate-400 mt-1 block">
+                      بياض: {totalLayingHens} | نامي/لحم: {totalGrowerBirds} | صوص 1: {p1ChicksCount}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Three Feed Categories Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+                {/* 1. Starter Feed */}
+                <div className="p-5 rounded-3xl bg-amber-50/50 border border-amber-200/80 flex flex-col justify-between space-y-4 relative overflow-hidden">
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-10 h-10 rounded-2xl bg-amber-500 text-white flex items-center justify-center shadow-xs">
+                          <Flame className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <h4 className="font-black text-slate-900 text-sm">علف بادي (24-27%)</h4>
+                          <span className="text-[10px] font-bold text-amber-800">حضانات التدفئة (المرحلة 1)</span>
+                        </div>
+                      </div>
+                      <span className="text-[10px] font-black bg-amber-100 text-amber-900 px-2 py-0.5 rounded-full">
+                        عمر 1-21 يوم
+                      </span>
+                    </div>
+
+                    <div className="p-3.5 rounded-2xl bg-white border border-amber-200/60 space-y-2">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-slate-500">الكمية المستهلكة:</span>
+                        <span className="font-mono font-black text-amber-950 text-sm">
+                          {(feedTimeframe === 'today' ? p1KgToday : p1KgMonth).toLocaleString('ar-SA')} كغم
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-slate-500">ما يعادل بالأكياس:</span>
+                        <span className="font-mono font-bold text-slate-700">
+                          {(feedTimeframe === 'today' ? p1BagsToday : p1BagsMonth)} كيس ({starterBagWeight} كغم)
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between text-xs pt-1.5 border-t border-slate-100">
+                        <span className="text-slate-600 font-bold">التكلفة المالية:</span>
+                        <span className="font-mono font-black text-amber-700 text-sm">
+                          {(feedTimeframe === 'today' ? p1CostToday : p1CostMonth).toLocaleString('ar-SA')} ر.ي
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="text-[11px] space-y-1.5 text-slate-600 px-1">
+                      <div className="flex justify-between">
+                        <span>القطيع المستفيد:</span>
+                        <b className="font-mono text-slate-900">{p1ChicksCount} صوص</b>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>سعر الكيس في المستودع:</span>
+                        <b className="font-mono text-slate-900">{starterCostPerBag.toLocaleString('ar-SA')} ر.ي</b>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>الرصيد المتاح بالمخزن:</span>
+                        <b className={`font-mono ${starterAvailableBags <= 1 ? 'text-rose-600 font-black' : 'text-slate-900'}`}>
+                          {starterAvailableBags} كيس
+                        </b>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="pt-2 border-t border-amber-200/60 text-[10px] text-amber-900/80 bg-amber-100/50 p-2.5 rounded-xl">
+                    💡 يعتمد معدل التحضين التدريجي (6.5 إلى 16.5 جرام/صوص/يوم حسب الأسبوع).
+                  </div>
+                </div>
+
+                {/* 2. Grower Feed */}
+                <div className="p-5 rounded-3xl bg-teal-50/50 border border-teal-200/80 flex flex-col justify-between space-y-4 relative overflow-hidden">
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-10 h-10 rounded-2xl bg-teal-600 text-white flex items-center justify-center shadow-xs">
+                          <Wind className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <h4 className="font-black text-slate-900 text-sm">علف نامي (20-22%)</h4>
+                          <span className="text-[10px] font-bold text-teal-800">تحضين مرحلة 2 + تسمين</span>
+                        </div>
+                      </div>
+                      <span className="text-[10px] font-black bg-teal-100 text-teal-900 px-2 py-0.5 rounded-full">
+                        عمر 22-38 يوم
+                      </span>
+                    </div>
+
+                    <div className="p-3.5 rounded-2xl bg-white border border-teal-200/60 space-y-2">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-slate-500">الكمية المستهلكة:</span>
+                        <span className="font-mono font-black text-teal-950 text-sm">
+                          {(feedTimeframe === 'today' ? growerKgToday : growerKgMonth).toLocaleString('ar-SA')} كغم
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-slate-500">ما يعادل بالأكياس:</span>
+                        <span className="font-mono font-bold text-slate-700">
+                          {(feedTimeframe === 'today' ? growerBagsToday : growerBagsMonth)} كيس ({growerBagWeight} كغم)
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between text-xs pt-1.5 border-t border-slate-100">
+                        <span className="text-slate-600 font-bold">التكلفة المالية:</span>
+                        <span className="font-mono font-black text-teal-700 text-sm">
+                          {(feedTimeframe === 'today' ? growerCostToday : growerCostMonth).toLocaleString('ar-SA')} ر.ي
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="text-[11px] space-y-1.5 text-slate-600 px-1">
+                      <div className="flex justify-between">
+                        <span>القطيع المستفيد:</span>
+                        <b className="font-mono text-slate-900">{totalGrowerBirds} طائر ({p2ChicksCount} صوص + {fatteningBirdsCount} لحم)</b>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>سعر الكيس في المستودع:</span>
+                        <b className="font-mono text-slate-900">{growerCostPerBag.toLocaleString('ar-SA')} ر.ي</b>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>الرصيد المتاح بالمخزن:</span>
+                        <b className={`font-mono ${growerAvailableBags <= 1 ? 'text-rose-600 font-black' : 'text-slate-900'}`}>
+                          {growerAvailableBags} كيس
+                        </b>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="pt-2 border-t border-teal-200/60 text-[10px] text-teal-900/80 bg-teal-100/50 p-2.5 rounded-xl">
+                    💡 يغطي مرحلة الترييش والنمو السريع وطيور التسمين بمعدل 21-26 جم/طائر/يوم.
+                  </div>
+                </div>
+
+                {/* 3. Layer Feed */}
+                <div className="p-5 rounded-3xl bg-emerald-50/50 border border-emerald-200/80 flex flex-col justify-between space-y-4 relative overflow-hidden">
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-10 h-10 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shadow-xs">
+                          <Egg className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <h4 className="font-black text-slate-900 text-sm">علف بياض (20%)</h4>
+                          <span className="text-[10px] font-bold text-emerald-800">إناث السمان البياضة</span>
+                        </div>
+                      </div>
+                      <span className="text-[10px] font-black bg-emerald-100 text-emerald-900 px-2 py-0.5 rounded-full">
+                        30 جم/طير/يوم
+                      </span>
+                    </div>
+
+                    <div className="p-3.5 rounded-2xl bg-white border border-emerald-200/60 space-y-2">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-slate-500">الكمية المستهلكة:</span>
+                        <span className="font-mono font-black text-emerald-950 text-sm">
+                          {(feedTimeframe === 'today' ? layerKgToday : layerKgMonth).toLocaleString('ar-SA')} كغم
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-slate-500">ما يعادل بالأكياس:</span>
+                        <span className="font-mono font-bold text-slate-700">
+                          {(feedTimeframe === 'today' ? layerBagsToday : layerBagsMonth)} كيس ({layerBagWeight} كغم)
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between text-xs pt-1.5 border-t border-slate-100">
+                        <span className="text-slate-600 font-bold">التكلفة المالية:</span>
+                        <span className="font-mono font-black text-emerald-700 text-sm">
+                          {(feedTimeframe === 'today' ? layerCostToday : layerCostMonth).toLocaleString('ar-SA')} ر.ي
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="text-[11px] space-y-1.5 text-slate-600 px-1">
+                      <div className="flex justify-between">
+                        <span>القطيع المستفيد:</span>
+                        <b className="font-mono text-slate-900">{totalLayingHens} أنثى بياضة</b>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>سعر الكيس في المستودع:</span>
+                        <b className="font-mono text-slate-900">{layerCostPerBag.toLocaleString('ar-SA')} ر.ي</b>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>الرصيد المتاح بالمخزن:</span>
+                        <b className={`font-mono ${layerAvailableBags <= 1 ? 'text-rose-600 font-black' : 'text-slate-900'}`}>
+                          {layerAvailableBags} كيس
+                        </b>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="pt-2 border-t border-emerald-200/60 text-[10px] text-emerald-900/80 bg-emerald-100/50 p-2.5 rounded-xl">
+                    💡 معيار الإنتاج: 30 جرام لكل أنثى بياضة يومياً لضمان استقرار نسبة البيض ({generalLayingRate}%).
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-5 border-t border-slate-100 bg-slate-50/80 flex flex-col sm:flex-row items-center justify-between gap-4 sticky bottom-0 z-10">
+              <div className="flex items-center gap-2 text-xs text-slate-600">
+                <Info className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>
+                  إجمالي الاستهلاك {feedTimeframe === 'today' ? 'اليومي' : 'الشهري'}:{' '}
+                  <b className="font-mono font-black text-slate-900">
+                    {(feedTimeframe === 'today' ? totalFeedKgToday : totalFeedKgMonth).toLocaleString('ar-SA')} كغم
+                  </b>{' '}
+                  بتكلفة{' '}
+                  <b className="font-mono font-black text-emerald-700">
+                    {(feedTimeframe === 'today' ? totalFeedCostToday : totalFeedCostMonth).toLocaleString('ar-SA')} ر.ي
+                  </b>
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2 w-full sm:w-auto">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowFeedAnalyticsModal(false);
+                    onNavigate('health_feed');
+                  }}
+                  className="flex-1 sm:flex-none px-4 py-2.5 rounded-2xl bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs flex items-center justify-center gap-1.5 transition-colors shadow-xs cursor-pointer"
+                >
+                  <Warehouse className="w-4 h-4" />
+                  <span>مستودع الأعلاف والصحة</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowFeedAnalyticsModal(false);
+                    onNavigate('incubation');
+                  }}
+                  className="flex-1 sm:flex-none px-4 py-2.5 rounded-2xl bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 transition-colors shadow-xs cursor-pointer"
+                >
+                  <Baby className="w-4 h-4" />
+                  <span>إدارة التحضين والفقاسات</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowFeedAnalyticsModal(false)}
+                  className="px-4 py-2.5 rounded-2xl bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-xs transition-colors cursor-pointer"
+                >
+                  إغلاق
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
