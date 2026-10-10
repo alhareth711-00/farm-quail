@@ -73,8 +73,30 @@ export const FatteningMeatView: React.FC = () => {
     const count = Number(birdsCount);
     const live = Number(liveWeightKg);
     const dressed = Number(dressedWeightKg);
-    const dressingPct = calcDressingPercentage(dressed, live);
 
+    if (!count || isNaN(count) || count <= 0) {
+      toast('يرجى إدخال عدد صحيح للطيور المحولة للمجزرة أكبر من الصفر', 'error');
+      return;
+    }
+
+    if (!live || isNaN(live) || live <= 0 || !dressed || isNaN(dressed) || dressed <= 0) {
+      toast('يرجى إدخال وزن حي ووزن مجهز صحيحين أكبر من الصفر', 'error');
+      return;
+    }
+
+    const targetRoom = rooms?.find((r) => r.id === selectedRoomId);
+    if (targetRoom) {
+      const roomTotal = targetRoom.malesCount + targetRoom.femalesCount;
+      if (count > roomTotal) {
+        toast(
+          `⚠️ عدد الطيور المطلوب تحويلها (${count}) أكبر من إجمالي الطيور الحية في هذه الغرفة (${roomTotal} طائر)!`,
+          'error'
+        );
+        return;
+      }
+    }
+
+    const dressingPct = calcDressingPercentage(dressed, live);
     const pairs = Math.floor(count / 2);
 
     const record: SlaughterRecord = {
@@ -98,7 +120,6 @@ export const FatteningMeatView: React.FC = () => {
     await db.slaughterRecords.add(record);
 
     // 2. Deduct birds from room
-    const targetRoom = rooms?.find((r) => r.id === selectedRoomId);
     if (targetRoom) {
       const halfCount = Math.floor(count / 2);
       await db.rooms.update(targetRoom.id, {

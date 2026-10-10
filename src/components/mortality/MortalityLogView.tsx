@@ -76,7 +76,10 @@ export const MortalityLogView: React.FC = () => {
 
   const handleSaveMortality = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (quantity <= 0) return;
+    if (!quantity || isNaN(quantity) || quantity <= 0) {
+      toast('يرجى إدخال عدد صحيح للطيور النافقة أكبر من الصفر', 'error');
+      return;
+    }
 
     let batName: string | undefined = undefined;
     let rmName: string | undefined = undefined;
@@ -92,6 +95,15 @@ export const MortalityLogView: React.FC = () => {
         (t) => t.batteryId === selectedBatteryId && t.tierNumber === selectedTierNumber
       );
       if (targetTier) {
+        const available = gender === 'male' ? targetTier.malesCount : targetTier.femalesCount;
+        if (quantity > available) {
+          toast(
+            `⚠️ عدد الطيور النافقة المدخل (${quantity}) أكبر من الرصيد المتوفر في هذا الدور (${available})!`,
+            'error'
+          );
+          return;
+        }
+
         if (gender === 'male') {
           await db.tiers.update(targetTier.id, {
             malesCount: Math.max(0, targetTier.malesCount - quantity),
@@ -109,6 +121,15 @@ export const MortalityLogView: React.FC = () => {
 
       // Deduct from room live birds
       if (rm) {
+        const available = gender === 'male' ? rm.malesCount : rm.femalesCount;
+        if (quantity > available) {
+          toast(
+            `⚠️ عدد الطيور النافقة المدخل (${quantity}) أكبر من الرصيد المتوفر في هذه الغرفة (${available})!`,
+            'error'
+          );
+          return;
+        }
+
         if (gender === 'male') {
           await db.rooms.update(rm.id, {
             malesCount: Math.max(0, rm.malesCount - quantity),

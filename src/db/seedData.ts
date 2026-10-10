@@ -650,6 +650,8 @@ export async function initializeDatabase(forceRefresh = false) {
         costPerBag: 29000,
         minThresholdBags: 1,
         lastRestockedDate: daysAgo(4),
+        openingStockBags: 42,
+        openingStockKg: 2100,
       },
       {
         id: 'feed-2',
@@ -661,6 +663,8 @@ export async function initializeDatabase(forceRefresh = false) {
         costPerBag: 27000,
         minThresholdBags: 1,
         lastRestockedDate: daysAgo(5),
+        openingStockBags: 35,
+        openingStockKg: 1750,
       },
       {
         id: 'feed-3',
@@ -672,6 +676,8 @@ export async function initializeDatabase(forceRefresh = false) {
         costPerBag: 25500,
         minThresholdBags: 1,
         lastRestockedDate: daysAgo(2),
+        openingStockBags: 65,
+        openingStockKg: 3250,
       },
     ];
     await db.feedStock.bulkPut(feeds);

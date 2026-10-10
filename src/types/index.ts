@@ -381,6 +381,8 @@ export interface FeedStock {
   costPerBag: number;
   minThresholdBags: number; // تنبيه عند هبوط الرصيد
   lastRestockedDate: string;
+  openingStockKg?: number; // الرصيد الافتتاحي بالكيلوغرام للمطابقة الدقيقة
+  openingStockBags?: number; // الرصيد الافتتاحي بالأكياس
 }
 
 export interface FeedConsumptionRecord {

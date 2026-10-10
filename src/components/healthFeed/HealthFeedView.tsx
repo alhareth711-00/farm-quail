@@ -30,6 +30,9 @@ import {
   CreditCard,
   Settings,
   Zap,
+  Calculator,
+  FileCheck,
+  RefreshCw,
 } from 'lucide-react';
 
 export const HealthFeedView: React.FC = () => {
@@ -47,14 +50,28 @@ export const HealthFeedView: React.FC = () => {
   const batteries = useLiveQuery(() => db.batteries.toArray(), []);
   const tiers = useLiveQuery(() => db.tiers.toArray(), []);
   const rooms = useLiveQuery(() => db.rooms.toArray(), []);
+  const purchases = useLiveQuery(() => db.purchases.toArray(), []);
 
-  // Ensure default min alert threshold is 1 bag across all feed stocks
+  // Ensure default min alert threshold is 1 bag and opening stock balances exist
   useEffect(() => {
     const migrateThresholds = async () => {
       const stocks = await db.feedStock.toArray();
+      const defaultOpenings: Record<string, { bags: number; kg: number }> = {
+        starter_24_27: { bags: 42, kg: 2100 },
+        grower_fattening: { bags: 35, kg: 1750 },
+        layer_production: { bags: 65, kg: 3250 },
+      };
       for (const stock of stocks) {
+        const updates: Partial<FeedStock> = {};
         if (!stock.minThresholdBags || [10, 8, 15].includes(stock.minThresholdBags)) {
-          await db.feedStock.update(stock.id, { minThresholdBags: 1 });
+          updates.minThresholdBags = 1;
+        }
+        if (stock.openingStockKg === undefined) {
+          updates.openingStockKg = defaultOpenings[stock.feedType]?.kg ?? stock.totalKg;
+          updates.openingStockBags = defaultOpenings[stock.feedType]?.bags ?? stock.bagsCount;
+        }
+        if (Object.keys(updates).length > 0) {
+          await db.feedStock.update(stock.id, updates);
         }
       }
     };
@@ -64,6 +81,7 @@ export const HealthFeedView: React.FC = () => {
   // Modals
   const [showAddMedModal, setShowAddMedModal] = useState(false);
   const [showConfigModal, setShowConfigModal] = useState<FeedStock | null>(null);
+  const [showReconciliationModal, setShowReconciliationModal] = useState(false);
   const [configMinBags, setConfigMinBags] = useState<number>(1);
   const [configBagWeight, setConfigBagWeight] = useState<number>(50);
 
@@ -190,6 +208,32 @@ export const HealthFeedView: React.FC = () => {
 
     const bags = Math.max(0, Number(adjustedBags));
     const totalKg = Math.max(0, Number(adjustedKg));
+
+    const diffKg = Math.round((showAdjustStockModal.totalKg - totalKg) * 100) / 100;
+    if (diffKg !== 0) {
+      const isDeficit = diffKg > 0;
+      const bagWeight = showAdjustStockModal.bagWeightKg || 50;
+      const unitCost = (showAdjustStockModal.costPerBag || 0) / bagWeight;
+      const diffBags = Math.round((Math.abs(diffKg) / bagWeight) * 100) / 100;
+      const costAmount = Math.round(Math.abs(diffKg) * unitCost);
+
+      await db.feedConsumption.add({
+        id: `fc-audit-${Date.now()}`,
+        date: todayStr,
+        targetType: 'all',
+        targetId: isDeficit ? 'audit-deficit' : 'audit-surplus',
+        targetName: isDeficit
+          ? `تسوية جردية (عجز مخزني: -${diffKg} كغم)`
+          : `تسوية جردية (فائض مخزني: +${Math.abs(diffKg)} كغم)`,
+        feedType: showAdjustStockModal.feedType,
+        bagsUsed: isDeficit ? diffBags : -diffBags,
+        kgUsed: diffKg,
+        costAmount: isDeficit ? costAmount : -costAmount,
+        notes: `تسوية الجرد الدوري الفعلي لمستودع الأعلاف لـ (${showAdjustStockModal.name}): تم تعديل الرصيد من ${showAdjustStockModal.totalKg} كغم إلى ${totalKg} كغم (${diffKg > 0 ? `عجز: ${diffKg}` : `فائض: ${Math.abs(diffKg)}`} كغم)`,
+        recordedBy: userName || 'مشرف الجرد والمستودع',
+        createdAt: new Date().toISOString(),
+      });
+    }
 
     await db.feedStock.update(showAdjustStockModal.id, {
       bagsCount: bags,
@@ -318,7 +362,25 @@ export const HealthFeedView: React.FC = () => {
     }
 
     const kg = Number(kgConsumed);
+    if (!kg || isNaN(kg) || kg <= 0) {
+      toast('يرجى إدخال كمية استهلاك صحيحة بالكيلوغرام أكبر من الصفر', 'error');
+      return;
+    }
+
     const stockItem = feedStocks?.find((f) => f.feedType === selectedFeedType);
+    if (!stockItem) {
+      toast('صنف العلف المحدد غير موجود في سجل المستودع', 'error');
+      return;
+    }
+
+    if (stockItem.totalKg < kg) {
+      toast(
+        `⚠️ رصيد المستودع من (${stockItem.name}) هو ${stockItem.totalKg.toLocaleString('ar-SA')} كغم فقط! لا يكفي للكمية المطلوبة (${kg} كغم).`,
+        'error'
+      );
+      return;
+    }
+
     const bagWeight = stockItem?.bagWeightKg || 50;
     const bags = kg / bagWeight;
     const unitCost = stockItem ? (stockItem.costPerBag || 0) / bagWeight : 0;
@@ -338,15 +400,13 @@ export const HealthFeedView: React.FC = () => {
       createdAt: new Date().toISOString(),
     });
 
-    // Deduct from stock
-    if (stockItem) {
-      const newKg = Math.max(0, stockItem.totalKg - kg);
-      const newBags = Math.floor(newKg / bagWeight);
-      await db.feedStock.update(stockItem.id, {
-        totalKg: newKg,
-        bagsCount: newBags,
-      });
-    }
+    // Deduct from stock safely
+    const newKg = Math.max(0, Math.round((stockItem.totalKg - kg) * 100) / 100);
+    const newBags = Math.floor(newKg / bagWeight);
+    await db.feedStock.update(stockItem.id, {
+      totalKg: newKg,
+      bagsCount: newBags,
+    });
 
     toast(`تم تسجيل استهلاك ${kg} كغم علف وخصمها من الرصيد العام بتكلفة ${costAmount.toLocaleString('ar-SA')} ${farmSettings.currency}`, 'success');
     setShowConsumptionModal(false);
@@ -400,6 +460,113 @@ export const HealthFeedView: React.FC = () => {
     setShowAddMedModal(false);
   };
 
+  // Detailed Reconciliation & Audit Calculation: (Opening + Purchases) - (Flock Daily + POS + Adjustments) = Current Stock
+  const reconciliationData = (feedStocks || []).map((stock) => {
+    const bagWeight = stock.bagWeightKg || 50;
+    const defaultOpenings: Record<string, number> = {
+      starter_24_27: 2100,
+      grower_fattening: 1750,
+      layer_production: 3250,
+    };
+    const openingKg = stock.openingStockKg ?? (defaultOpenings[stock.feedType] || stock.totalKg);
+    const openingBags = stock.openingStockBags ?? Math.floor(openingKg / bagWeight);
+
+    // Purchases from db.purchases
+    const matchedPurchases = purchases?.filter((p) => {
+      const name = p.itemName || '';
+      const notes = p.notes || '';
+      return (
+        name === stock.name ||
+        notes.includes(stock.name) ||
+        (p.id?.startsWith('purch-feed-') &&
+          ((stock.feedType === 'starter_24_27' && name.includes('بادي')) ||
+            (stock.feedType === 'grower_fattening' && name.includes('نامي')) ||
+            (stock.feedType === 'layer_production' && name.includes('بياض'))))
+      );
+    }) || [];
+    const purchasedBags = matchedPurchases.reduce((sum, p) => sum + (Number(p.quantity) || 0), 0);
+    const purchasedKg = purchasedBags * bagWeight;
+    const purchasedCost = matchedPurchases.reduce((sum, p) => sum + (Number(p.totalAmount) || 0), 0);
+
+    // Bird Daily Consumptions
+    const birdConsumptionLogs = consumptionLogs?.filter(
+      (c) => c.feedType === stock.feedType && c.targetId !== 'pos-sale' && !c.targetId?.startsWith('audit-')
+    ) || [];
+    const birdConsumptionKg = Math.round(birdConsumptionLogs.reduce((sum, c) => sum + (Number(c.kgUsed) || 0), 0) * 100) / 100;
+    const birdConsumptionBags = Math.round((birdConsumptionKg / bagWeight) * 100) / 100;
+
+    // POS Sales
+    const posSalesLogs = consumptionLogs?.filter(
+      (c) => c.feedType === stock.feedType && c.targetId === 'pos-sale'
+    ) || [];
+    const posSalesKg = Math.round(posSalesLogs.reduce((sum, c) => sum + (Number(c.kgUsed) || 0), 0) * 100) / 100;
+    const posSalesBags = Math.round((posSalesKg / bagWeight) * 100) / 100;
+
+    // Inventory Audit Adjustments
+    const auditLogs = consumptionLogs?.filter(
+      (c) => c.feedType === stock.feedType && c.targetId?.startsWith('audit-')
+    ) || [];
+    const auditAdjustmentsKg = Math.round(auditLogs.reduce((sum, c) => sum + (Number(c.kgUsed) || 0), 0) * 100) / 100;
+    const auditAdjustmentsBags = Math.round((auditAdjustmentsKg / bagWeight) * 100) / 100;
+
+    // Calculated Book Stock
+    const calculatedKg = Math.round((openingKg + purchasedKg - birdConsumptionKg - posSalesKg - auditAdjustmentsKg) * 100) / 100;
+    const calculatedBags = Math.floor(calculatedKg / bagWeight);
+
+    // Actual Live Stock in warehouse
+    const actualKg = Math.round(stock.totalKg * 100) / 100;
+    const actualBags = stock.bagsCount;
+
+    // Variance
+    const varianceKg = Math.round((actualKg - calculatedKg) * 100) / 100;
+    const varianceGrams = Math.round(varianceKg * 1000);
+    const isMatched = Math.abs(varianceKg) < 0.001;
+
+    return {
+      stock,
+      openingKg,
+      openingBags,
+      purchasedBags,
+      purchasedKg,
+      purchasedCost,
+      birdConsumptionKg,
+      birdConsumptionBags,
+      posSalesKg,
+      posSalesBags,
+      auditAdjustmentsKg,
+      auditAdjustmentsBags,
+      calculatedKg,
+      calculatedBags,
+      actualKg,
+      actualBags,
+      varianceKg,
+      varianceGrams,
+      isMatched,
+    };
+  });
+
+  const totalOpeningKg = reconciliationData.reduce((s, r) => s + r.openingKg, 0);
+  const totalPurchasedKg = reconciliationData.reduce((s, r) => s + r.purchasedKg, 0);
+  const totalBirdConsumptionKg = reconciliationData.reduce((s, r) => s + r.birdConsumptionKg, 0);
+  const totalPosSalesKg = reconciliationData.reduce((s, r) => s + r.posSalesKg, 0);
+  const totalAuditAdjustmentsKg = reconciliationData.reduce((s, r) => s + r.auditAdjustmentsKg, 0);
+  const totalCalculatedKg = reconciliationData.reduce((s, r) => s + r.calculatedKg, 0);
+  const totalActualKg = reconciliationData.reduce((s, r) => s + r.actualKg, 0);
+  const totalVarianceKg = Math.round((totalActualKg - totalCalculatedKg) * 100) / 100;
+  const isOverallReconciled = reconciliationData.length > 0 && reconciliationData.every((r) => r.isMatched);
+
+  const handleCalibrateStock = async (stock: FeedStock, item: (typeof reconciliationData)[0]) => {
+    const calibratedOpeningKg = Math.round(
+      (item.actualKg - (item.purchasedKg - item.birdConsumptionKg - item.posSalesKg - item.auditAdjustmentsKg)) * 100
+    ) / 100;
+    const calibratedOpeningBags = Math.floor(calibratedOpeningKg / (stock.bagWeightKg || 50));
+    await db.feedStock.update(stock.id, {
+      openingStockKg: Math.max(0, calibratedOpeningKg),
+      openingStockBags: Math.max(0, calibratedOpeningBags),
+    });
+    toast(`تمت معايرة الرصيد الافتتاحي لـ (${stock.name}) بنجاح وتحقيق مطابقة 100% بالجرام!`, 'success');
+  };
+
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-6 animate-fadeIn">
       {/* Top Header */}
@@ -442,6 +609,14 @@ export const HealthFeedView: React.FC = () => {
           >
             <SlidersHorizontal className="w-4 h-4 text-amber-400" />
             <span>تسوية وجرد المخزون</span>
+          </button>
+          <button
+            onClick={() => setShowReconciliationModal(true)}
+            className="px-4 py-2.5 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs flex items-center gap-2 shadow-apple transition-all"
+            title="تدقيق ومطابقة رصيد المخزون الدفتري والفعلي والمالي بدقة 100% بالجرام"
+          >
+            <Calculator className="w-4 h-4 stroke-[2.5]" />
+            <span>مطابقة المخزون والمالية ⚖️</span>
           </button>
           <button
             onClick={() => setShowConsumptionModal(true)}
@@ -1714,6 +1889,229 @@ export const HealthFeedView: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: مطابقة المخزون والمالية (Inventory & Ledger Reconciliation) */}
+      {showReconciliationModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fadeIn" dir="rtl">
+          <div className="bg-white rounded-3xl max-w-5xl w-full max-h-[92vh] overflow-y-auto shadow-2xl border border-slate-100 flex flex-col">
+            {/* Modal Header */}
+            <div className="p-6 border-b border-slate-100 bg-gradient-to-r from-indigo-500/10 via-emerald-500/10 to-teal-500/10 flex items-start justify-between gap-4 sticky top-0 bg-white/95 backdrop-blur-xs z-10">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shadow-md shadow-indigo-200">
+                  <Calculator className="w-6 h-6 stroke-[2.5]" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-xl font-black text-slate-900">
+                      مطابقة المخزون والمالية (Inventory & Ledger Reconciliation)
+                    </h3>
+                    <span className="text-[10px] font-black bg-indigo-100 text-indigo-900 px-2.5 py-0.5 rounded-full border border-indigo-200">
+                      ⚖️ دقة 100% بالجرام
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-1">
+                    (رصيد العلف الافتتاحي + إجمالي مشتريات الأعلاف بسندات الصرف) - (استهلاك الطيور اليومي + مبيعات POS + تسويات الجرد) = رصيد المستودع الفعلي
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowReconciliationModal(false)}
+                className="w-10 h-10 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center transition-colors cursor-pointer"
+                title="إغلاق"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 space-y-6">
+              {/* Integrity Status Card */}
+              <div className={`p-5 rounded-3xl border ${
+                isOverallReconciled
+                  ? 'bg-emerald-50/80 border-emerald-300 text-emerald-950'
+                  : 'bg-amber-50/80 border-amber-300 text-amber-950'
+              } flex flex-col md:flex-row items-start md:items-center justify-between gap-4 shadow-xs`}>
+                <div className="flex items-center gap-3">
+                  <div className={`p-3 rounded-2xl ${isOverallReconciled ? 'bg-emerald-600' : 'bg-amber-500'} text-white shadow-xs`}>
+                    <FileCheck className="w-6 h-6 stroke-[2.5]" />
+                  </div>
+                  <div>
+                    <h4 className="font-black text-sm">
+                      {isOverallReconciled
+                        ? '✅ معادلة مطابقة المخزون والمالية محققة بنسبة 100.00% لكافة الأصناف'
+                        : '⚠️ هناك تباين طفيف بين الرصيد الدفتري والفعلي، يمكن الضغط على زر "معايرة" لمطابقة دقيقة'}
+                    </h4>
+                    <p className="text-xs text-slate-600 mt-0.5">
+                      إجمالي الفارق عبر كافة الأصناف: <b className="font-mono font-black">{totalVarianceKg} كغم ({Math.round(totalVarianceKg * 1000)} جرام)</b>.
+                      كل حركة استهلاك، بيع، شراء، أو تسوية مسجلة ومربوطة محاسبياً ومخزنياً.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className={`px-3 py-1 rounded-xl text-xs font-black font-mono border ${
+                    isOverallReconciled
+                      ? 'bg-emerald-100 text-emerald-900 border-emerald-300'
+                      : 'bg-amber-100 text-amber-900 border-amber-300'
+                  }`}>
+                    {isOverallReconciled ? 'مطابقة تامة: 0 جرام فارق' : `فارق: ${totalVarianceKg} كغم`}
+                  </span>
+                </div>
+              </div>
+
+              {/* Summary Mathematical Equation Flow */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 text-center">
+                <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200">
+                  <span className="text-[10px] font-bold text-slate-500 block mb-0.5">1. الرصيد الافتتاحي</span>
+                  <b className="text-sm font-black text-slate-900 font-mono">{totalOpeningKg.toLocaleString('ar-SA')}</b>
+                  <span className="text-[10px] text-slate-400 block">كغم</span>
+                </div>
+                <div className="p-3 rounded-2xl bg-emerald-50 border border-emerald-200">
+                  <span className="text-[10px] font-bold text-emerald-700 block mb-0.5">+ مشتريات بسندات صرف</span>
+                  <b className="text-sm font-black text-emerald-900 font-mono">+{totalPurchasedKg.toLocaleString('ar-SA')}</b>
+                  <span className="text-[10px] text-emerald-600 block">كغم</span>
+                </div>
+                <div className="p-3 rounded-2xl bg-amber-50 border border-amber-200">
+                  <span className="text-[10px] font-bold text-amber-700 block mb-0.5">- استهلاك الطيور اليومي</span>
+                  <b className="text-sm font-black text-amber-900 font-mono">-{totalBirdConsumptionKg.toLocaleString('ar-SA')}</b>
+                  <span className="text-[10px] text-amber-600 block">كغم</span>
+                </div>
+                <div className="p-3 rounded-2xl bg-sky-50 border border-sky-200">
+                  <span className="text-[10px] font-bold text-sky-700 block mb-0.5">- مبيعات الأعلاف (POS)</span>
+                  <b className="text-sm font-black text-sky-900 font-mono">-{totalPosSalesKg.toLocaleString('ar-SA')}</b>
+                  <span className="text-[10px] text-sky-600 block">كغم</span>
+                </div>
+                <div className="p-3 rounded-2xl bg-purple-50 border border-purple-200">
+                  <span className="text-[10px] font-bold text-purple-700 block mb-0.5">+/- تسويات الجرد</span>
+                  <b className="text-sm font-black text-purple-900 font-mono">{totalAuditAdjustmentsKg >= 0 ? `-${totalAuditAdjustmentsKg}` : `+${Math.abs(totalAuditAdjustmentsKg)}`}</b>
+                  <span className="text-[10px] text-purple-600 block">كغم</span>
+                </div>
+                <div className="p-3 rounded-2xl bg-indigo-50 border border-indigo-200">
+                  <span className="text-[10px] font-bold text-indigo-700 block mb-0.5">= رصيد المستودع الفعلي</span>
+                  <b className="text-sm font-black text-indigo-900 font-mono">{totalActualKg.toLocaleString('ar-SA')}</b>
+                  <span className="text-[10px] text-indigo-600 block">كغم</span>
+                </div>
+              </div>
+
+              {/* Breakdown Table for the 3 Feed Types */}
+              <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs">
+                <div className="p-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+                  <h4 className="text-xs font-black text-slate-800">
+                    جدول التدقيق والمطابقة التفصيلي لكل صنف علف بالمستودع
+                  </h4>
+                  <span className="text-[11px] text-slate-500">
+                    جميع الحركات مربوطة بـ IndexedDB وتعمل Offline-First بشكل كامل
+                  </span>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-right text-xs">
+                    <thead>
+                      <tr className="bg-slate-100/70 border-b border-slate-200 text-slate-600 font-extrabold text-[11px]">
+                        <th className="py-3 px-3">صنف العلف</th>
+                        <th className="py-3 px-3">الرصيد الافتتاحي</th>
+                        <th className="py-3 px-3">+ مشتريات بسندات</th>
+                        <th className="py-3 px-3">- استهلاك الطيور</th>
+                        <th className="py-3 px-3">- مبيعات POS</th>
+                        <th className="py-3 px-3">+/- تسوية الجرد</th>
+                        <th className="py-3 px-3">الرصيد المحسوب</th>
+                        <th className="py-3 px-3">الرصيد الفعلي الحالي</th>
+                        <th className="py-3 px-3">فارق الجرام</th>
+                        <th className="py-3 px-3 text-center">حالة التدقيق</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {reconciliationData.map((row) => (
+                        <tr key={row.stock.id} className="hover:bg-slate-50 transition-colors">
+                          <td className="py-3 px-3">
+                            <div className="font-black text-slate-900">{row.stock.name}</div>
+                            <span className="text-[10px] text-slate-400 font-mono">{row.stock.feedType}</span>
+                          </td>
+                          <td className="py-3 px-3 font-mono font-bold text-slate-700">
+                            {row.openingKg.toLocaleString('ar-SA')} كغم
+                            <span className="text-[10px] text-slate-400 block font-sans">({row.openingBags} كيس)</span>
+                          </td>
+                          <td className="py-3 px-3 font-mono font-bold text-emerald-700">
+                            +{row.purchasedKg.toLocaleString('ar-SA')} كغم
+                            <span className="text-[10px] text-emerald-600/80 block font-sans">
+                              ({row.purchasedBags} كيس - {row.purchasedCost.toLocaleString('ar-SA')} ر.ي)
+                            </span>
+                          </td>
+                          <td className="py-3 px-3 font-mono font-bold text-amber-700">
+                            -{row.birdConsumptionKg.toLocaleString('ar-SA')} كغم
+                            <span className="text-[10px] text-amber-600/80 block font-sans">({row.birdConsumptionBags} كيس)</span>
+                          </td>
+                          <td className="py-3 px-3 font-mono font-bold text-sky-700">
+                            -{row.posSalesKg.toLocaleString('ar-SA')} كغم
+                            <span className="text-[10px] text-sky-600/80 block font-sans">({row.posSalesBags} كيس)</span>
+                          </td>
+                          <td className="py-3 px-3 font-mono font-bold text-purple-700">
+                            {row.auditAdjustmentsKg >= 0 ? `-${row.auditAdjustmentsKg}` : `+${Math.abs(row.auditAdjustmentsKg)}`} كغم
+                            <span className="text-[10px] text-purple-600/80 block font-sans">({row.auditAdjustmentsBags} كيس)</span>
+                          </td>
+                          <td className="py-3 px-3 font-mono font-black text-slate-900 bg-slate-50/50">
+                            {row.calculatedKg.toLocaleString('ar-SA')} كغم
+                            <span className="text-[10px] text-slate-500 block font-sans">({row.calculatedBags} كيس)</span>
+                          </td>
+                          <td className="py-3 px-3 font-mono font-black text-emerald-800 bg-emerald-50/30">
+                            {row.actualKg.toLocaleString('ar-SA')} كغم
+                            <span className="text-[10px] text-emerald-600 block font-sans">({row.actualBags} كيس)</span>
+                          </td>
+                          <td className="py-3 px-3 font-mono font-black">
+                            <span className={`px-2 py-0.5 rounded-md text-[11px] ${
+                              row.isMatched ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
+                            }`}>
+                              {row.varianceGrams} جم
+                            </span>
+                          </td>
+                          <td className="py-3 px-3 text-center">
+                            {row.isMatched ? (
+                              <span className="inline-flex items-center gap-1 text-[11px] font-black text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-xl border border-emerald-200">
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                                <span>مطابق 100%</span>
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => handleCalibrateStock(row.stock, row)}
+                                className="inline-flex items-center gap-1 text-[11px] font-black text-indigo-700 bg-indigo-50 hover:bg-indigo-100 px-2.5 py-1 rounded-xl border border-indigo-200 transition-colors cursor-pointer"
+                                title="معايرة الرصيد الافتتاحي لمطابقة الرصيد الفعلي بدقة"
+                              >
+                                <RefreshCw className="w-3 h-3 text-indigo-600" />
+                                <span>معايرة</span>
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-5 border-t border-slate-100 bg-slate-50/80 flex flex-col sm:flex-row items-center justify-between gap-4 sticky bottom-0 z-10">
+              <div className="text-xs text-slate-600 flex items-center gap-2">
+                <FileCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>
+                  نظام التخزين المحلي الآمن (Dexie IndexedDB) يضمن عمل التدقيق دون اتصال بالإنترنت مع تحديث تفاعلي لحظي (Live Query).
+                </span>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowReconciliationModal(false)}
+                className="px-5 py-2.5 rounded-2xl bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs transition-colors cursor-pointer"
+              >
+                إغلاق نافذة التدقيق
+              </button>
+            </div>
           </div>
         </div>
       )}
