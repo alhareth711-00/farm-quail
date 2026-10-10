@@ -31,6 +31,7 @@ import type {
   Account,
   JournalEntry,
   BroodingBatch,
+  FlockTransferRecord,
 } from '../types';
 
 export class QuailFarmDB extends Dexie {
@@ -66,6 +67,7 @@ export class QuailFarmDB extends Dexie {
   salaryPayments!: Table<SalaryPaymentRecord, string>;
   accounts!: Table<Account, string>;
   journalEntries!: Table<JournalEntry, string>;
+  flockTransfers!: Table<FlockTransferRecord, string>;
 
   constructor() {
     super('QuailFarmERP_DB');
@@ -128,6 +130,10 @@ export class QuailFarmDB extends Dexie {
 
     this.version(8).stores({
       broodingBatches: 'id, batchNumber, phase, status, hatchDate',
+    });
+
+    this.version(9).stores({
+      flockTransfers: 'id, date, batchId, destinationType, destinationId, gender',
     });
   }
 }

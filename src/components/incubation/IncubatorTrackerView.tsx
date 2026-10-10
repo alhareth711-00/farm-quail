@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { db } from '../../db';
 import { useLiveQuery } from 'dexie-react-hooks';
 import type {
@@ -7,8 +7,13 @@ import type {
   BroodingWeeklyRate,
   FeedStock,
   FeedType,
+  Battery,
+  BatteryTier,
+  FloorRoom,
+  FlockTransferRecord,
+  TransferDestinationType,
 } from '../../types';
-import { DEFAULT_BROODING_RATES } from '../../types';
+import { DEFAULT_BROODING_RATES, STRICT_ARABIC_BATTERY_ORDER } from '../../types';
 import { useToast } from '../../context/ToastContext';
 import { useAuth } from '../../context/AuthContext';
 import confetti from 'canvas-confetti';
@@ -38,6 +43,15 @@ import {
   Save,
   RefreshCw,
   Package,
+  Split,
+  ArrowLeftRight,
+  Warehouse,
+  Grid,
+  Filter,
+  Search,
+  Check,
+  AlertTriangle,
+  History,
 } from 'lucide-react';
 
 export const IncubatorTrackerView: React.FC = () => {
@@ -46,16 +60,20 @@ export const IncubatorTrackerView: React.FC = () => {
   const todayStr = new Date().toISOString().split('T')[0];
 
   // Top Section Tab
-  const [activeTab, setActiveTab] = useState<'brooding' | 'incubation' | 'schedule_settings'>('brooding');
+  const [activeTab, setActiveTab] = useState<'brooding' | 'transfers' | 'incubation' | 'schedule_settings'>('brooding');
 
   // Queries
   const incubationBatches = useLiveQuery(() => db.incubationBatches.toArray(), []);
   const broodingBatches = useLiveQuery(() => db.broodingBatches.toArray(), []);
   const feedStocks = useLiveQuery(() => db.feedStock.toArray(), []);
   const feedScheduleSetting = useLiveQuery(() => db.settings.get('broodingFeedSchedule'), []);
+  const batteries = useLiveQuery(() => db.batteries.toArray(), []);
+  const tiers = useLiveQuery(() => db.tiers.toArray(), []);
+  const rooms = useLiveQuery(() => db.rooms.toArray(), []);
+  const flockTransfers = useLiveQuery(() => db.flockTransfers.reverse().sortBy('date'), []);
 
   // Active Weekly Rates (from settings or defaults)
-  const activeRates: BroodingWeeklyRate[] = React.useMemo(() => {
+  const activeRates: BroodingWeeklyRate[] = useMemo(() => {
     if (feedScheduleSetting?.value?.rates && Array.isArray(feedScheduleSetting.value.rates)) {
       return feedScheduleSetting.value.rates;
     }
@@ -102,6 +120,56 @@ export const IncubatorTrackerView: React.FC = () => {
 
   // Schedule Settings Form (Custom Grams / Day)
   const [editRates, setEditRates] = useState<BroodingWeeklyRate[]>(DEFAULT_BROODING_RATES);
+
+  // --- Sexing & Partial Transfer State (فرز الجنسين والنقل الجزئي للقطيع) ---
+  const [activeBatchForSexing, setActiveBatchForSexing] = useState<BroodingBatch | null>(null);
+  const [sexingModalTab, setSexingModalTab] = useState<'sexing_and_transfer' | 'batch_history'>('sexing_and_transfer');
+
+  // Sexing input values
+  const [femalesCountInput, setFemalesCountInput] = useState<number>(0);
+  const [malesCountInput, setMalesCountInput] = useState<number>(0);
+  const [sexingMortalityQty, setSexingMortalityQty] = useState<number>(0);
+  const [sexingMortalityReason, setSexingMortalityReason] = useState<string>('فرز واكتشاف طيور ضعيفة/نافقة');
+  const [sexingNotes, setSexingNotes] = useState<string>('');
+
+  // Female Transfer options
+  const [transferFemalesEnabled, setTransferFemalesEnabled] = useState<boolean>(true);
+  const [transferFemalesQty, setTransferFemalesQty] = useState<number>(0);
+  const [femaleDestType, setFemaleDestType] = useState<'battery_tier' | 'room'>('battery_tier');
+  const [femaleSelectedBatteryId, setFemaleSelectedBatteryId] = useState<string>('bat-1');
+  const [femaleSelectedTierId, setFemaleSelectedTierId] = useState<string>('');
+  const [femaleSelectedRoomId, setFemaleSelectedRoomId] = useState<string>('');
+
+  // Male Transfer options
+  const [transferMalesEnabled, setTransferMalesEnabled] = useState<boolean>(true);
+  const [transferMalesQty, setTransferMalesQty] = useState<number>(0);
+  const [maleDestType, setMaleDestType] = useState<'room' | 'battery_tier'>('room');
+  const [maleSelectedRoomId, setMaleSelectedRoomId] = useState<string>('');
+  const [maleSelectedBatteryId, setMaleSelectedBatteryId] = useState<string>('bat-1');
+  const [maleSelectedTierId, setMaleSelectedTierId] = useState<string>('');
+
+  // Filters for Main Transfers Tab
+  const [transferFilterGender, setTransferFilterGender] = useState<'all' | 'female' | 'male'>('all');
+  const [transferSearchQuery, setTransferSearchQuery] = useState<string>('');
+
+  // Sync tiers when battery changes
+  useEffect(() => {
+    if (femaleSelectedBatteryId && tiers) {
+      const batTiers = tiers.filter((t) => t.batteryId === femaleSelectedBatteryId);
+      if (batTiers.length > 0 && !batTiers.some((t) => t.id === femaleSelectedTierId)) {
+        setFemaleSelectedTierId(batTiers[0].id);
+      }
+    }
+  }, [femaleSelectedBatteryId, tiers, femaleSelectedTierId]);
+
+  useEffect(() => {
+    if (maleSelectedBatteryId && tiers) {
+      const batTiers = tiers.filter((t) => t.batteryId === maleSelectedBatteryId);
+      if (batTiers.length > 0 && !batTiers.some((t) => t.id === maleSelectedTierId)) {
+        setMaleSelectedTierId(batTiers[0].id);
+      }
+    }
+  }, [maleSelectedBatteryId, tiers, maleSelectedTierId]);
 
   // --- Helper Calculations for Brooding ---
 
@@ -393,6 +461,282 @@ export const IncubatorTrackerView: React.FC = () => {
 
     toast(`تم تسجيل نفوق ${qty} كتكوت. المتبقي الحي: ${newCurrent} كتكوت`, 'warning');
     setActiveBatchForMortality(null);
+  };
+
+  // --- Handlers: Sexing & Partial Transfer (فرز الجنسين والنقل الجزئي للقطيع) ---
+  const handleOpenSexingModal = (batch: BroodingBatch) => {
+    setActiveBatchForSexing(batch);
+    setSexingModalTab('sexing_and_transfer');
+
+    // If batch was previously sexed, use its stored values; else start with an approximate split
+    const currentLive = batch.currentChicksCount;
+    const defaultF = batch.sexedFemalesCount ?? Math.floor(currentLive * 0.5);
+    const defaultM = batch.sexedMalesCount ?? Math.floor(currentLive * 0.45);
+
+    setFemalesCountInput(defaultF);
+    setMalesCountInput(defaultM);
+    setSexingMortalityQty(0);
+    setSexingMortalityReason('فرز واكتشاف طيور ضعيفة/نافقة');
+    setSexingNotes('');
+
+    // Pre-fill female transfer options
+    setTransferFemalesEnabled(defaultF > 0);
+    setTransferFemalesQty(defaultF);
+    setFemaleDestType('battery_tier');
+
+    const firstBat = batteries?.[0]?.id || 'bat-1';
+    setFemaleSelectedBatteryId(firstBat);
+    const firstBatTiers = tiers?.filter((t) => t.batteryId === firstBat) || [];
+    setFemaleSelectedTierId(firstBatTiers[0]?.id || '');
+    const firstLayerRoom = rooms?.find((r) => r.purpose === 'layers')?.id || rooms?.[0]?.id || '';
+    setFemaleSelectedRoomId(firstLayerRoom);
+
+    // Pre-fill male transfer options
+    setTransferMalesEnabled(defaultM > 0);
+    setTransferMalesQty(defaultM);
+    setMaleDestType('room');
+    const firstFatteningRoom = rooms?.find((r) => r.purpose === 'fattening')?.id || rooms?.[0]?.id || '';
+    setMaleSelectedRoomId(firstFatteningRoom);
+    setMaleSelectedBatteryId(firstBat);
+    setMaleSelectedTierId(firstBatTiers[0]?.id || '');
+  };
+
+  const handleExecuteSexingAndTransfer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeBatchForSexing) return;
+
+    const currentLive = activeBatchForSexing.currentChicksCount;
+    const fCount = Math.max(0, Number(femalesCountInput) || 0);
+    const mCount = Math.max(0, Number(malesCountInput) || 0);
+    const mortCount = Math.max(0, Number(sexingMortalityQty) || 0);
+
+    // 1. Math check: Sum of sorted and mortality cannot exceed current flock
+    const sortedSum = fCount + mCount + mortCount;
+    if (sortedSum > currentLive) {
+      toast(
+        `خطأ في الأرقام: مجموع الإناث (${fCount}) والذكور (${mCount}) والنفوق (${mortCount}) = ${sortedSum} يتجاوز العدد الحي الحالي (${currentLive})!`,
+        'error'
+      );
+      return;
+    }
+
+    const unsexedRemaining = Math.max(0, currentLive - sortedSum);
+
+    // 2. Strict Transfer Validations
+    const fTransferQty = transferFemalesEnabled ? Math.max(0, Number(transferFemalesQty) || 0) : 0;
+    if (transferFemalesEnabled) {
+      if (fTransferQty <= 0) {
+        toast('يرجى تحديد عدد الإناث المطلوب نقلها (أو إلغاء تفعيل نقل الإناث)', 'warning');
+        return;
+      }
+      if (fTransferQty > fCount) {
+        toast(
+          `لا يمكن نقل ${fTransferQty} أنثى؛ لأن عدد الإناث المفروزة المتاحة هو ${fCount} فقط!`,
+          'error'
+        );
+        return;
+      }
+      if (femaleDestType === 'battery_tier' && !femaleSelectedTierId) {
+        toast('يرجى اختيار الدور/القفص المستهدف في عنبر البطاريات للإناث', 'warning');
+        return;
+      }
+      if (femaleDestType === 'room' && !femaleSelectedRoomId) {
+        toast('يرجى اختيار الغرفة المستهدفة للإناث', 'warning');
+        return;
+      }
+    }
+
+    const mTransferQty = transferMalesEnabled ? Math.max(0, Number(transferMalesQty) || 0) : 0;
+    if (transferMalesEnabled) {
+      if (mTransferQty <= 0) {
+        toast('يرجى تحديد عدد الذكور المطلوب نقلها (أو إلغاء تفعيل نقل الذكور)', 'warning');
+        return;
+      }
+      if (mTransferQty > mCount) {
+        toast(
+          `لا يمكن نقل ${mTransferQty} ذكر؛ لأن عدد الذكور المفروزة المتاحة هو ${mCount} فقط!`,
+          'error'
+        );
+        return;
+      }
+      if (maleDestType === 'room' && !maleSelectedRoomId) {
+        toast('يرجى اختيار عنبر/غرفة التسمين المستهدفة للذكور', 'warning');
+        return;
+      }
+      if (maleDestType === 'battery_tier' && !maleSelectedTierId) {
+        toast('يرجى اختيار الدور المستهدف للذكور في البطاريات', 'warning');
+        return;
+      }
+    }
+
+    const totalTransferred = fTransferQty + mTransferQty;
+    if (totalTransferred + mortCount > currentLive) {
+      toast('لا يمكن نقل عدد طيور أكبر من العدد المتوفر بالدفعة!', 'error');
+      return;
+    }
+
+    try {
+      const now = new Date();
+      const dateStr = now.toISOString().split('T')[0];
+      const timeStr = now.toTimeString().slice(0, 5);
+
+      await db.transaction(
+        'rw',
+        [db.broodingBatches, db.tiers, db.rooms, db.flockTransfers, db.detailedMortality],
+        async () => {
+          // A. Calculate updated state for brooding batch
+          const remainingInBrooder = currentLive - totalTransferred - mortCount;
+          const remainingSexedFemales = fCount - fTransferQty;
+          const remainingSexedMales = mCount - mTransferQty;
+          const newTransferredFemales =
+            (activeBatchForSexing.transferredFemalesCount || 0) + fTransferQty;
+          const newTransferredMales =
+            (activeBatchForSexing.transferredMalesCount || 0) + mTransferQty;
+          const newMortalityCount = activeBatchForSexing.mortalityCount + mortCount;
+          const newStatus = remainingInBrooder <= 0 ? 'graduated' : 'active';
+
+          // Update Brooding Batch
+          await db.broodingBatches.update(activeBatchForSexing.id, {
+            currentChicksCount: Math.max(0, remainingInBrooder),
+            sexedFemalesCount: Math.max(0, remainingSexedFemales),
+            sexedMalesCount: Math.max(0, remainingSexedMales),
+            unsexedCount: Math.max(0, unsexedRemaining),
+            transferredFemalesCount: newTransferredFemales,
+            transferredMalesCount: newTransferredMales,
+            mortalityCount: newMortalityCount,
+            lastSexingDate: dateStr,
+            status: newStatus,
+            notes: sexingNotes
+              ? `${activeBatchForSexing.notes || ''} [فرز ${dateStr}: ${sexingNotes}]`.trim()
+              : activeBatchForSexing.notes,
+            updatedAt: now.toISOString(),
+          });
+
+          // B. Transfer Females if enabled
+          if (transferFemalesEnabled && fTransferQty > 0) {
+            let destName = '';
+            if (femaleDestType === 'battery_tier') {
+              const targetTier = await db.tiers.get(femaleSelectedTierId);
+              const parentBat = batteries?.find((b) => b.id === targetTier?.batteryId);
+              destName = `عنبر البطاريات (بطارية ${parentBat?.name || ''} - الدور ${targetTier?.tierNumber || ''})`;
+              if (targetTier) {
+                await db.tiers.update(targetTier.id, {
+                  femalesCount: targetTier.femalesCount + fTransferQty,
+                  housingDate: targetTier.housingDate || dateStr,
+                  hatchDate: targetTier.hatchDate || activeBatchForSexing.hatchDate,
+                  updatedAt: now.toISOString(),
+                });
+              }
+            } else {
+              const targetRoom = await db.rooms.get(femaleSelectedRoomId);
+              destName = `عنبر أرضي: ${targetRoom?.name || 'غرفة بياض'}`;
+              if (targetRoom) {
+                await db.rooms.update(targetRoom.id, {
+                  femalesCount: targetRoom.femalesCount + fTransferQty,
+                  status: 'active',
+                  housingDate: targetRoom.housingDate || dateStr,
+                });
+              }
+            }
+
+            // Record Transfer in Log
+            await db.flockTransfers.add({
+              id: `tr-fem-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+              date: dateStr,
+              time: timeStr,
+              batchId: activeBatchForSexing.id,
+              batchNumber: activeBatchForSexing.batchNumber,
+              gender: 'female',
+              quantity: fTransferQty,
+              destinationType: femaleDestType,
+              destinationId: femaleDestType === 'battery_tier' ? femaleSelectedTierId : femaleSelectedRoomId,
+              destinationName: destName,
+              notes: `نقل جزئي لإناث مفروزة (${fTransferQty} أنثى) من دفعة ${activeBatchForSexing.batchNumber}`,
+              recordedBy: userName || 'مشرف التحضين',
+              createdAt: now.toISOString(),
+            });
+          }
+
+          // C. Transfer Males if enabled
+          if (transferMalesEnabled && mTransferQty > 0) {
+            let destName = '';
+            if (maleDestType === 'room') {
+              const targetRoom = await db.rooms.get(maleSelectedRoomId);
+              destName = `عنبر التسمين واللحوم: ${targetRoom?.name || 'غرفة تسمين'}`;
+              if (targetRoom) {
+                await db.rooms.update(targetRoom.id, {
+                  malesCount: targetRoom.malesCount + mTransferQty,
+                  status: 'active',
+                  housingDate: targetRoom.housingDate || dateStr,
+                });
+              }
+            } else {
+              const targetTier = await db.tiers.get(maleSelectedTierId);
+              const parentBat = batteries?.find((b) => b.id === targetTier?.batteryId);
+              destName = `عنبر البطاريات (بطارية ${parentBat?.name || ''} - الدور ${targetTier?.tierNumber || ''})`;
+              if (targetTier) {
+                await db.tiers.update(targetTier.id, {
+                  malesCount: targetTier.malesCount + mTransferQty,
+                  housingDate: targetTier.housingDate || dateStr,
+                  hatchDate: targetTier.hatchDate || activeBatchForSexing.hatchDate,
+                  updatedAt: now.toISOString(),
+                });
+              }
+            }
+
+            // Record Transfer in Log
+            await db.flockTransfers.add({
+              id: `tr-male-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+              date: dateStr,
+              time: timeStr,
+              batchId: activeBatchForSexing.id,
+              batchNumber: activeBatchForSexing.batchNumber,
+              gender: 'male',
+              quantity: mTransferQty,
+              destinationType: maleDestType,
+              destinationId: maleDestType === 'room' ? maleSelectedRoomId : maleSelectedTierId,
+              destinationName: destName,
+              notes: `نقل جزئي لذكور مفروزة (${mTransferQty} ذكر) من دفعة ${activeBatchForSexing.batchNumber}`,
+              recordedBy: userName || 'مشرف التحضين',
+              createdAt: now.toISOString(),
+            });
+          }
+
+          // D. Record Mortality if any
+          if (mortCount > 0) {
+            await db.detailedMortality.add({
+              id: `dm-sexing-${Date.now()}`,
+              date: dateStr,
+              time: timeStr,
+              description: `نفوق أثناء فرز وتجنيس دفعة (${activeBatchForSexing.batchNumber}) - ${sexingMortalityReason || 'طيور نافقة/ضعيفة'}`,
+              gender: 'mixed',
+              locationType: 'room',
+              roomName: activeBatchForSexing.locationName,
+              exactLocationText: activeBatchForSexing.locationName,
+              quantity: mortCount,
+              disposalMethod: 'burial',
+              recordedBy: userName || 'مشرف التحضين',
+              createdAt: now.toISOString(),
+            });
+          }
+        }
+      );
+
+      confetti({ particleCount: 70, spread: 70, origin: { y: 0.6 } });
+      const remainingTotal = currentLive - totalTransferred - mortCount;
+      if (remainingTotal <= 0) {
+        toast('🎉 تم بنجاح نقل كامل طيور الدفعة وتخريجها من التحضين!', 'success');
+      } else {
+        toast(
+          `✅ تم اعتماد الفرز ونقل ${totalTransferred} طائر بنجاح! المتبقي بالحضانة: ${remainingTotal} كتكوت.`,
+          'success'
+        );
+      }
+      setActiveBatchForSexing(null);
+    } catch (err) {
+      console.error('Sexing & Transfer Error:', err);
+      toast('حدث خطأ أثناء معالجة الفرز والنقل. يرجى المحاولة ثانية.', 'error');
+    }
   };
 
   // 5. Open and Save Add Brooding Batch
@@ -738,6 +1082,21 @@ export const IncubatorTrackerView: React.FC = () => {
         </button>
 
         <button
+          onClick={() => setActiveTab('transfers')}
+          className={`pb-3 px-4 font-black text-xs sm:text-sm flex items-center gap-2 transition-all relative ${
+            activeTab === 'transfers'
+              ? 'text-sky-600 border-b-2 border-sky-600'
+              : 'text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <ArrowLeftRight className="w-4 h-4 text-sky-600" />
+          <span>سجل حركات ونقل القطيع</span>
+          <span className="text-[10px] px-2 py-0.5 rounded-full bg-sky-100 text-sky-900 font-mono font-bold">
+            {flockTransfers?.length || 0}
+          </span>
+        </button>
+
+        <button
           onClick={() => setActiveTab('incubation')}
           className={`pb-3 px-4 font-black text-xs sm:text-sm flex items-center gap-2 transition-all relative ${
             activeTab === 'incubation'
@@ -913,6 +1272,54 @@ export const IncubatorTrackerView: React.FC = () => {
                       </div>
                     </div>
 
+                    {/* Age >= 38 Ready Banner */}
+                    {info.ageDays >= 38 && (
+                      <div className="p-3 rounded-2xl bg-gradient-to-r from-purple-500/10 via-indigo-500/10 to-pink-500/10 border border-purple-300 flex items-center justify-between text-xs">
+                        <div className="flex items-center gap-2 text-purple-950 font-bold">
+                          <Sparkles className="w-4 h-4 text-purple-600 animate-spin" />
+                          <span>وصلت الدفعة لعمر 38 يوماً - جاهزة تماماً للفرز والتجنيس والنقل النهائي إلى العنابر!</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenSexingModal(batch)}
+                          className="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-black text-xs shadow-sm flex items-center gap-1"
+                        >
+                          <Split className="w-3.5 h-3.5" />
+                          <span>فرز ونقل الآن</span>
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Sexing Status Bar (if previously sorted) */}
+                    {(batch.sexedFemalesCount !== undefined || batch.sexedMalesCount !== undefined) && (
+                      <div className="p-3 rounded-2xl bg-indigo-50/60 border border-indigo-200/80 flex flex-wrap items-center justify-between text-xs gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-bold text-indigo-950 flex items-center gap-1">
+                            <Split className="w-3.5 h-3.5 text-indigo-600" />
+                            <span>المفروز المتبقي بالحضانة:</span>
+                          </span>
+                          <span className="px-2 py-0.5 rounded-lg bg-pink-100 text-pink-900 font-mono font-bold">
+                            ♀ {batch.sexedFemalesCount || 0} إناث
+                          </span>
+                          <span className="px-2 py-0.5 rounded-lg bg-sky-100 text-sky-900 font-mono font-bold">
+                            ♂ {batch.sexedMalesCount || 0} ذكور
+                          </span>
+                          <span className="px-2 py-0.5 rounded-lg bg-slate-100 text-slate-700 font-mono font-bold">
+                            🐣 {batch.unsexedCount ?? Math.max(0, batch.currentChicksCount - ((batch.sexedFemalesCount || 0) + (batch.sexedMalesCount || 0)))} غير مميز
+                          </span>
+                        </div>
+                        {((batch.transferredFemalesCount || 0) > 0 || (batch.transferredMalesCount || 0) > 0) && (
+                          <div className="text-[11px] text-slate-600 font-semibold flex items-center gap-1.5">
+                            <ArrowRight className="w-3.5 h-3.5 text-emerald-600" />
+                            <span>نُقل سابقاً للعنابر:</span>
+                            <span className="text-pink-700 font-bold font-mono">♀ {batch.transferredFemalesCount || 0}</span>
+                            <span>•</span>
+                            <span className="text-sky-700 font-bold font-mono">♂ {batch.transferredMalesCount || 0}</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
                     {/* Batch Metrics Grid */}
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-3.5 rounded-2xl bg-slate-50/70 border border-slate-100 text-xs">
                       {/* Current Chicks */}
@@ -994,7 +1401,30 @@ export const IncubatorTrackerView: React.FC = () => {
                         </span>
                       </div>
 
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {/* Sexing & Partial Transfer Button */}
+                        <button
+                          type="button"
+                          onClick={() => handleOpenSexingModal(batch)}
+                          className={`px-3.5 py-2 rounded-2xl font-black text-xs flex items-center gap-1.5 shadow-sm transition-all ${
+                            info.ageDays >= 38
+                              ? 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white animate-pulse'
+                              : (batch.sexedFemalesCount || batch.sexedMalesCount)
+                              ? 'bg-purple-100 hover:bg-purple-200 text-purple-900 border border-purple-300'
+                              : 'bg-slate-100 hover:bg-purple-50 text-slate-700 hover:text-purple-800 border border-slate-200'
+                          }`}
+                          title="فرز وتجنيس ونقل جزئي للقطيع"
+                        >
+                          <Split className="w-3.5 h-3.5" />
+                          <span>
+                            {batch.sexedFemalesCount || batch.sexedMalesCount
+                              ? '🚚 نقل جزئي / متابعة الفرز'
+                              : info.ageDays >= 38
+                              ? '🔬 فرز الجنسين ونقل القطيع (عمر 38+)'
+                              : '🔬 فرز وتجنيس ونقل جزئي'}
+                          </span>
+                        </button>
+
                         {/* Daily Deduction Button */}
                         {info.isDeductedToday ? (
                           <div className="flex items-center gap-2">
@@ -1046,7 +1476,188 @@ export const IncubatorTrackerView: React.FC = () => {
       )}
 
       {/* ========================================================= */}
-      {/* TAB 2: INCUBATION CYCLES (17 DAYS) */}
+      {/* TAB 2: FLOCK TRANSFERS & MOVEMENTS LOG (سجل حركات ونقل القطيع) */}
+      {/* ========================================================= */}
+      {activeTab === 'transfers' && (
+        <div className="space-y-5">
+          {/* Top Transfer KPI Summary */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="p-4 rounded-3xl bg-white border border-slate-200/80 shadow-sm">
+              <span className="text-[11px] font-bold text-slate-500 block mb-1">إجمالي الطيور المنقولة</span>
+              <div className="text-2xl font-black text-slate-900 font-mono">
+                {(flockTransfers?.reduce((acc, t) => acc + t.quantity, 0) || 0).toLocaleString('ar-SA')}
+              </div>
+              <span className="text-[10px] text-slate-400 mt-0.5 block">من قسم التحضين إلى العنابر</span>
+            </div>
+
+            <div className="p-4 rounded-3xl bg-pink-50/50 border border-pink-200 shadow-sm">
+              <span className="text-[11px] font-bold text-pink-900 block mb-1">إناث مفروزة منقولة (♀)</span>
+              <div className="text-2xl font-black text-pink-700 font-mono">
+                {(flockTransfers?.filter((t) => t.gender === 'female').reduce((acc, t) => acc + t.quantity, 0) || 0).toLocaleString('ar-SA')}
+              </div>
+              <span className="text-[10px] text-pink-800 mt-0.5 block">إلى أقفاص وبطاريات البياض</span>
+            </div>
+
+            <div className="p-4 rounded-3xl bg-sky-50/50 border border-sky-200 shadow-sm">
+              <span className="text-[11px] font-bold text-sky-900 block mb-1">ذكور مفروزة منقولة (♂)</span>
+              <div className="text-2xl font-black text-sky-700 font-mono">
+                {(flockTransfers?.filter((t) => t.gender === 'male').reduce((acc, t) => acc + t.quantity, 0) || 0).toLocaleString('ar-SA')}
+              </div>
+              <span className="text-[10px] text-sky-800 mt-0.5 block">إلى عنابر التسمين واللحوم</span>
+            </div>
+
+            <div className="p-4 rounded-3xl bg-white border border-slate-200/80 shadow-sm">
+              <span className="text-[11px] font-bold text-slate-500 block mb-1">عدد عمليات النقل المنفذة</span>
+              <div className="text-2xl font-black text-indigo-700 font-mono">
+                {flockTransfers?.length || 0}
+              </div>
+              <span className="text-[10px] text-indigo-600 mt-0.5 block">عملية نقل جزئي مسجلة</span>
+            </div>
+          </div>
+
+          {/* Filter Bar */}
+          <div className="p-4 rounded-3xl bg-white border border-slate-200/80 flex flex-col sm:flex-row items-center justify-between gap-3">
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+              <div className="relative flex-1 sm:w-64">
+                <Search className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  placeholder="بحث برقم الدفعة أو الوجهة..."
+                  value={transferSearchQuery}
+                  onChange={(e) => setTransferSearchQuery(e.target.value)}
+                  className="w-full pr-9 pl-3 py-2 rounded-2xl glass-input text-xs"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1.5 w-full sm:w-auto overflow-x-auto">
+              <button
+                onClick={() => setTransferFilterGender('all')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                  transferFilterGender === 'all'
+                    ? 'bg-slate-900 text-white'
+                    : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
+                }`}
+              >
+                الكل
+              </button>
+              <button
+                onClick={() => setTransferFilterGender('female')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                  transferFilterGender === 'female'
+                    ? 'bg-pink-600 text-white'
+                    : 'bg-pink-50 hover:bg-pink-100 text-pink-700'
+                }`}
+              >
+                إناث فقط (♀)
+              </button>
+              <button
+                onClick={() => setTransferFilterGender('male')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                  transferFilterGender === 'male'
+                    ? 'bg-sky-600 text-white'
+                    : 'bg-sky-50 hover:bg-sky-100 text-sky-700'
+                }`}
+              >
+                ذكور فقط (♂)
+              </button>
+            </div>
+          </div>
+
+          {/* Transfers Table */}
+          {flockTransfers && flockTransfers.length > 0 ? (
+            <div className="rounded-3xl border border-slate-200/80 bg-white overflow-hidden shadow-sm">
+              <div className="overflow-x-auto">
+                <table className="w-full text-right text-xs">
+                  <thead className="bg-slate-50 border-b border-slate-100 text-slate-500 font-bold">
+                    <tr>
+                      <th className="py-3 px-4">التاريخ والوقت</th>
+                      <th className="py-3 px-4">دفعة التحضين المصدر</th>
+                      <th className="py-3 px-4">الجنس</th>
+                      <th className="py-3 px-4 text-center">العدد المنقول</th>
+                      <th className="py-3 px-4">عنبر / وجهة الاستقبال</th>
+                      <th className="py-3 px-4">المشرف والملاحظات</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {flockTransfers
+                      .filter((t) => {
+                        if (transferFilterGender !== 'all' && t.gender !== transferFilterGender) return false;
+                        if (transferSearchQuery.trim()) {
+                          const q = transferSearchQuery.toLowerCase();
+                          return (
+                            t.batchNumber.toLowerCase().includes(q) ||
+                            t.destinationName.toLowerCase().includes(q) ||
+                            (t.notes || '').toLowerCase().includes(q)
+                          );
+                        }
+                        return true;
+                      })
+                      .map((t) => (
+                        <tr key={t.id} className="hover:bg-slate-50/50 transition-colors">
+                          <td className="py-3 px-4">
+                            <div className="font-mono font-bold text-slate-800">{t.date}</div>
+                            <div className="text-[10px] text-slate-400 font-mono">{t.time}</div>
+                          </td>
+                          <td className="py-3 px-4">
+                            <span className="font-mono font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-lg">
+                              {t.batchNumber}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4">
+                            {t.gender === 'female' ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-pink-50 border border-pink-200 text-pink-700 font-bold">
+                                <span>أنثى ♀</span>
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-sky-50 border border-sky-200 text-sky-700 font-bold">
+                                <span>ذكر ♂</span>
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-3 px-4 text-center">
+                            <span className="text-base font-black font-mono text-slate-900">
+                              {t.quantity.toLocaleString('ar-SA')}
+                            </span>
+                            <span className="text-[10px] text-slate-400 block">طائر</span>
+                          </td>
+                          <td className="py-3 px-4">
+                            <div className="font-bold text-slate-900 flex items-center gap-1.5">
+                              {t.destinationType === 'battery_tier' ? (
+                                <Grid className="w-3.5 h-3.5 text-purple-600 shrink-0" />
+                              ) : (
+                                <Warehouse className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                              )}
+                              <span>{t.destinationName}</span>
+                            </div>
+                            <span className="text-[10px] text-slate-400">
+                              {t.destinationType === 'battery_tier' ? 'بطاريات بياض' : 'عنبر أرضي / تسمين'}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4">
+                            <div className="text-slate-700 font-medium">{t.notes || '—'}</div>
+                            <div className="text-[10px] text-slate-400">بواسطة: {t.recordedBy}</div>
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : (
+            <div className="p-12 text-center rounded-3xl glass-panel text-slate-400 bg-white border border-slate-200 space-y-3">
+              <ArrowLeftRight className="w-12 h-12 mx-auto text-sky-400/50" />
+              <p className="text-sm font-bold text-slate-700">لا توجد عمليات نقل مسجلة حتى الآن</p>
+              <p className="text-xs text-slate-500">
+                عند فرز وتجنيس أي دفعة تحضين ونقل طيورها إلى البطاريات أو عنابر التسمين، ستظهر السجلات التفصيلية هنا.
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* TAB 3: INCUBATION CYCLES (17 DAYS) */}
       {/* ========================================================= */}
       {activeTab === 'incubation' && (
         <div className="space-y-6">
@@ -1347,6 +1958,740 @@ export const IncubatorTrackerView: React.FC = () => {
       {/* ========================================================= */}
       {/* MODALS */}
       {/* ========================================================= */}
+
+      {/* Modal: Flock Sexing & Partial Transfer Engine (فرز وتجنيس ونقل جزئي للقطيع) */}
+      {activeBatchForSexing && (() => {
+        const currentLive = activeBatchForSexing.currentChicksCount;
+        const fVal = Math.max(0, Number(femalesCountInput) || 0);
+        const mVal = Math.max(0, Number(malesCountInput) || 0);
+        const mortVal = Math.max(0, Number(sexingMortalityQty) || 0);
+        const sortedSum = fVal + mVal + mortVal;
+        const unsexedRemaining = currentLive - sortedSum;
+        const hasMathError = unsexedRemaining < 0;
+
+        // Female Transfer validation
+        const fTransferQty = transferFemalesEnabled ? Math.max(0, Number(transferFemalesQty) || 0) : 0;
+        const isFTransferQtyInvalid = transferFemalesEnabled && (fTransferQty <= 0 || fTransferQty > fVal);
+        const isFTransferDestInvalid =
+          transferFemalesEnabled &&
+          ((femaleDestType === 'battery_tier' && !femaleSelectedTierId) ||
+           (femaleDestType === 'room' && !femaleSelectedRoomId));
+
+        // Male Transfer validation
+        const mTransferQty = transferMalesEnabled ? Math.max(0, Number(transferMalesQty) || 0) : 0;
+        const isMTransferQtyInvalid = transferMalesEnabled && (mTransferQty <= 0 || mTransferQty > mVal);
+        const isMTransferDestInvalid =
+          transferMalesEnabled &&
+          ((maleDestType === 'room' && !maleSelectedRoomId) ||
+           (maleDestType === 'battery_tier' && !maleSelectedTierId));
+
+        const totalPlannedTransfer = fTransferQty + mTransferQty;
+        const exceedsTotalFlock = totalPlannedTransfer + mortVal > currentLive;
+
+        const canSubmit =
+          !hasMathError &&
+          !exceedsTotalFlock &&
+          (!transferFemalesEnabled || (!isFTransferQtyInvalid && !isFTransferDestInvalid)) &&
+          (!transferMalesEnabled || (!isMTransferQtyInvalid && !isMTransferDestInvalid)) &&
+          (sortedSum > 0);
+
+        // Destination details for selected female tier/room
+        const selectedFTier = tiers?.find((t) => t.id === femaleSelectedTierId);
+        const selectedFBat = batteries?.find((b) => b.id === selectedFTier?.batteryId);
+        const fTierCap = selectedFTier?.capacity || 30;
+        const fTierCurrent = selectedFTier ? selectedFTier.femalesCount + selectedFTier.malesCount : 0;
+        const fTierRemainingSlots = Math.max(0, fTierCap - fTierCurrent);
+
+        const selectedFRoom = rooms?.find((r) => r.id === femaleSelectedRoomId);
+
+        // Destination details for selected male room/tier
+        const selectedMRoom = rooms?.find((r) => r.id === maleSelectedRoomId);
+        const selectedMTier = tiers?.find((t) => t.id === maleSelectedTierId);
+        const selectedMBat = batteries?.find((b) => b.id === selectedMTier?.batteryId);
+
+        const batchAgeDays = Math.max(
+          1,
+          Math.floor((new Date().getTime() - new Date(activeBatchForSexing.hatchDate).getTime()) / (1000 * 60 * 60 * 24)) + 1
+        );
+
+        const batchHistoryList = flockTransfers?.filter((t) => t.batchId === activeBatchForSexing.id) || [];
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+            <div className="bg-white rounded-3xl p-5 sm:p-6 max-w-3xl w-full shadow-apple-modal border border-slate-100 text-right max-h-[92vh] overflow-y-auto space-y-4">
+              {/* Modal Header */}
+              <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 rounded-2xl bg-gradient-to-tr from-purple-600 to-pink-600 text-white shadow-sm">
+                    <Split className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-base sm:lg font-black text-slate-900 flex items-center gap-2">
+                      <span>فرز وتجنيس ونقل القطيع الجزئي</span>
+                      <span className="font-mono text-xs px-2 py-0.5 rounded-full bg-purple-100 text-purple-800">
+                        {activeBatchForSexing.batchNumber}
+                      </span>
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      العمر: <b className="text-slate-800 font-mono">{batchAgeDays} يوم</b> • الموقع: <b>{activeBatchForSexing.locationName}</b> • الرصيد الحي المتوفر بالتحضين:{' '}
+                      <b className="text-purple-700 font-mono">{currentLive} كتكوت</b>
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveBatchForSexing(null)}
+                  className="p-1.5 rounded-xl hover:bg-slate-100 text-slate-400 hover:text-slate-600"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Modal Navigation Tabs (Form vs History) */}
+              <div className="flex gap-2 border-b border-slate-100 pb-2">
+                <button
+                  type="button"
+                  onClick={() => setSexingModalTab('sexing_and_transfer')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                    sexingModalTab === 'sexing_and_transfer'
+                      ? 'bg-purple-600 text-white shadow-sm'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  <Split className="w-3.5 h-3.5" />
+                  <span>الفرز والتجنيس والنقل الجزئي</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSexingModalTab('batch_history')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                    sexingModalTab === 'batch_history'
+                      ? 'bg-indigo-600 text-white shadow-sm'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  <History className="w-3.5 h-3.5" />
+                  <span>سجل تحويلات هذه الدفعة</span>
+                  <span className="px-1.5 py-0.5 rounded-full bg-slate-200 text-slate-700 text-[10px] font-mono">
+                    {batchHistoryList.length}
+                  </span>
+                </button>
+              </div>
+
+              {sexingModalTab === 'batch_history' ? (
+                /* Tab: Batch History */
+                <div className="space-y-3 py-2">
+                  {batchHistoryList.length > 0 ? (
+                    <div className="border border-slate-200 rounded-2xl overflow-hidden">
+                      <table className="w-full text-right text-xs">
+                        <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold">
+                          <tr>
+                            <th className="p-3">التاريخ</th>
+                            <th className="p-3">الجنس</th>
+                            <th className="p-3 text-center">الكمية</th>
+                            <th className="p-3">الوجهة</th>
+                            <th className="p-3">المشرف</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {batchHistoryList.map((tr) => (
+                            <tr key={tr.id}>
+                              <td className="p-3 font-mono text-slate-700">{tr.date} {tr.time}</td>
+                              <td className="p-3">
+                                {tr.gender === 'female' ? (
+                                  <span className="px-2 py-0.5 rounded-lg bg-pink-100 text-pink-800 font-bold">إناث ♀</span>
+                                ) : (
+                                  <span className="px-2 py-0.5 rounded-lg bg-sky-100 text-sky-800 font-bold">ذكور ♂</span>
+                                )}
+                              </td>
+                              <td className="p-3 text-center font-mono font-bold text-slate-900">{tr.quantity}</td>
+                              <td className="p-3 font-semibold text-slate-800">{tr.destinationName}</td>
+                              <td className="p-3 text-slate-500 text-[11px]">{tr.recordedBy}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div className="text-center p-8 text-slate-400 text-xs">
+                      لم يتم تسجيل أي عمليات نقل سابقة لهذه الدفعة بعد.
+                    </div>
+                  )}
+                </div>
+              ) : (
+                /* Tab: Form for Sexing & Transfer */
+                <form onSubmit={handleExecuteSexingAndTransfer} className="space-y-4">
+                  {/* Step 1: Sexing Counts Form */}
+                  <div className="p-4 rounded-3xl bg-slate-50 border border-slate-200/90 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-black text-slate-900 flex items-center gap-2">
+                        <span className="w-5 h-5 rounded-full bg-purple-600 text-white flex items-center justify-center text-[10px]">1</span>
+                        <span>فرز وتجنيس القطيع والنفوق</span>
+                      </h4>
+                      <span className="text-[11px] font-bold text-slate-500">
+                        الرصيد الحي المتاح بالدفعة: <b className="font-mono text-purple-700">{currentLive}</b> كتكوت
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      {/* Females Input */}
+                      <div className="p-3 rounded-2xl bg-pink-50/70 border border-pink-200">
+                        <div className="flex items-center justify-between mb-1.5">
+                          <label className="text-xs font-black text-pink-900 flex items-center gap-1">
+                            <span>إناث مفروزة (♀)</span>
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => setFemalesCountInput(Math.floor(currentLive * 0.5))}
+                            className="text-[10px] font-bold text-pink-700 hover:underline"
+                          >
+                            50% ({Math.floor(currentLive * 0.5)})
+                          </button>
+                        </div>
+                        <input
+                          type="number"
+                          min="0"
+                          max={currentLive}
+                          required
+                          value={femalesCountInput}
+                          onChange={(e) => {
+                            const val = Math.max(0, Number(e.target.value));
+                            setFemalesCountInput(val);
+                            if (transferFemalesQty > val || transferFemalesQty === femalesCountInput) {
+                              setTransferFemalesQty(val);
+                            }
+                          }}
+                          className="w-full glass-input text-center text-lg font-mono font-black text-pink-700"
+                        />
+                        <span className="text-[10px] text-pink-800/80 block mt-1">تُخصص لإنتاج بيض المائدة والمخصب</span>
+                      </div>
+
+                      {/* Males Input */}
+                      <div className="p-3 rounded-2xl bg-sky-50/70 border border-sky-200">
+                        <div className="flex items-center justify-between mb-1.5">
+                          <label className="text-xs font-black text-sky-900 flex items-center gap-1">
+                            <span>ذكور مفروزة (♂)</span>
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const rem = Math.max(0, currentLive - femalesCountInput - sexingMortalityQty);
+                              setMalesCountInput(rem);
+                              setTransferMalesQty(rem);
+                            }}
+                            className="text-[10px] font-bold text-sky-700 hover:underline"
+                          >
+                            المتبقي ({Math.max(0, currentLive - femalesCountInput - sexingMortalityQty)})
+                          </button>
+                        </div>
+                        <input
+                          type="number"
+                          min="0"
+                          max={currentLive}
+                          required
+                          value={malesCountInput}
+                          onChange={(e) => {
+                            const val = Math.max(0, Number(e.target.value));
+                            setMalesCountInput(val);
+                            if (transferMalesQty > val || transferMalesQty === malesCountInput) {
+                              setTransferMalesQty(val);
+                            }
+                          }}
+                          className="w-full glass-input text-center text-lg font-mono font-black text-sky-700"
+                        />
+                        <span className="text-[10px] text-sky-800/80 block mt-1">تُخصص للتسمين واللحم أو التلقيح</span>
+                      </div>
+
+                      {/* Mortality during sexing Input */}
+                      <div className="p-3 rounded-2xl bg-rose-50/70 border border-rose-200">
+                        <div className="flex items-center justify-between mb-1.5">
+                          <label className="text-xs font-black text-rose-900 flex items-center gap-1">
+                            <Skull className="w-3.5 h-3.5 text-rose-600" />
+                            <span>نفوق أثناء الفرز</span>
+                          </label>
+                          <span className="text-[10px] text-rose-600 font-bold">اختياري</span>
+                        </div>
+                        <input
+                          type="number"
+                          min="0"
+                          max={currentLive}
+                          value={sexingMortalityQty}
+                          onChange={(e) => setSexingMortalityQty(Math.max(0, Number(e.target.value)))}
+                          className="w-full glass-input text-center text-lg font-mono font-black text-rose-700"
+                        />
+                        <span className="text-[10px] text-rose-800/80 block mt-1">يُخصم ويسجل بسجل النفوق العام</span>
+                      </div>
+                    </div>
+
+                    {/* Math Balance Feedback Bar */}
+                    <div>
+                      {hasMathError ? (
+                        <div className="p-3 rounded-2xl bg-rose-100 border border-rose-300 text-rose-900 text-xs font-bold flex items-center gap-2">
+                          <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                          <span>
+                            خطأ رياضي: مجموع الإناث ({fVal}) + الذكور ({mVal}) + النفوق ({mortVal}) = {sortedSum} يتجاوز العدد الحي ({currentLive}) بـ {-unsexedRemaining} طائر! يرجى مراجعة الأرقام.
+                          </span>
+                        </div>
+                      ) : unsexedRemaining === 0 ? (
+                        <div className="p-2.5 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs font-bold flex items-center justify-between">
+                          <span className="flex items-center gap-1.5">
+                            <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                            <span>تم فرز وتجنيس كامل طيور الدفعة بنسبة 100%!</span>
+                          </span>
+                          <span className="font-mono text-emerald-700 text-[11px]">المتبقي غير مميز: 0</span>
+                        </div>
+                      ) : (
+                        <div className="p-2.5 rounded-2xl bg-amber-50 border border-amber-200 text-amber-950 text-xs font-bold flex items-center justify-between">
+                          <span className="flex items-center gap-1.5">
+                            <Baby className="w-4 h-4 text-amber-600" />
+                            <span>
+                              يتبقى <b>{unsexedRemaining}</b> كتكوت غير مميز بعد (سيبقى في التحضين حتى ظهور علامات الجنس).
+                            </span>
+                          </span>
+                          <span className="font-mono text-amber-800 text-[11px] bg-amber-100 px-2 py-0.5 rounded-full">
+                            {Math.round((unsexedRemaining / currentLive) * 100)}% غير مميز
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Step 2: Partial Transfer Engine (محرك النقل الجزئي) */}
+                  <div className="p-4 rounded-3xl bg-slate-50 border border-slate-200/90 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-black text-slate-900 flex items-center gap-2">
+                        <span className="w-5 h-5 rounded-full bg-indigo-600 text-white flex items-center justify-center text-[10px]">2</span>
+                        <span>النقل الجزئي المخصص للطيور المفروزة</span>
+                      </h4>
+                      <span className="text-[10px] text-slate-500">
+                        حدد الكمية المنقولة بدقة، أو اتركها في التحضين لنقلها لاحقاً
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {/* Box A: Female Transfer Section */}
+                      <div className={`p-4 rounded-3xl border transition-all ${
+                        transferFemalesEnabled ? 'bg-pink-50/40 border-pink-300' : 'bg-slate-100/50 border-slate-200 opacity-60'
+                      }`}>
+                        <div className="flex items-center justify-between mb-3">
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={transferFemalesEnabled}
+                              onChange={(e) => setTransferFemalesEnabled(e.target.checked)}
+                              className="w-4 h-4 accent-pink-600 rounded cursor-pointer"
+                            />
+                            <span className="text-xs font-black text-pink-950">نقل إناث مفروزة (♀)</span>
+                          </label>
+                          <span className="text-[10px] font-bold text-pink-800 bg-pink-100 px-2 py-0.5 rounded-full font-mono">
+                            المتاح للفرز: {fVal} أنثى
+                          </span>
+                        </div>
+
+                        {transferFemalesEnabled && (
+                          <div className="space-y-3">
+                            {/* Quantity to transfer */}
+                            <div>
+                              <div className="flex items-center justify-between text-[11px] mb-1">
+                                <span className="font-bold text-slate-700">عدد الإناث المراد نقلها:</span>
+                                <div className="flex gap-1 text-[10px]">
+                                  <button
+                                    type="button"
+                                    onClick={() => setTransferFemalesQty(Math.floor(fVal * 0.25))}
+                                    className="px-1.5 py-0.5 bg-white border border-pink-200 rounded text-pink-800 hover:bg-pink-100 font-bold"
+                                  >
+                                    25%
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setTransferFemalesQty(Math.floor(fVal * 0.5))}
+                                    className="px-1.5 py-0.5 bg-white border border-pink-200 rounded text-pink-800 hover:bg-pink-100 font-bold"
+                                  >
+                                    50%
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setTransferFemalesQty(fVal)}
+                                    className="px-1.5 py-0.5 bg-pink-600 text-white rounded font-bold"
+                                  >
+                                    الكل ({fVal})
+                                  </button>
+                                </div>
+                              </div>
+                              <input
+                                type="number"
+                                min="1"
+                                max={fVal}
+                                value={transferFemalesQty}
+                                onChange={(e) => setTransferFemalesQty(Math.max(0, Number(e.target.value)))}
+                                className={`w-full glass-input text-center font-mono font-black text-base text-pink-900 ${
+                                  isFTransferQtyInvalid ? 'border-rose-400 bg-rose-50' : ''
+                                }`}
+                              />
+                              <div className="flex justify-between text-[10px] text-slate-500 mt-1 font-medium">
+                                <span>سيتبقى بالتحضين: <b className="font-mono text-pink-800">{Math.max(0, fVal - transferFemalesQty)}</b> أنثى</span>
+                                {fTransferQty > fVal && (
+                                  <span className="text-rose-600 font-bold">يتجاوز الإناث المتاحة!</span>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Destination Type Selector */}
+                            <div>
+                              <label className="block text-[11px] font-bold text-slate-700 mb-1">نوع وجهة الاستقبال:</label>
+                              <div className="grid grid-cols-2 gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => setFemaleDestType('battery_tier')}
+                                  className={`py-1.5 px-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1 ${
+                                    femaleDestType === 'battery_tier'
+                                      ? 'bg-purple-600 text-white shadow-sm'
+                                      : 'bg-white border border-slate-200 text-slate-600'
+                                  }`}
+                                >
+                                  <Grid className="w-3 h-3" />
+                                  <span>عنبر البطاريات</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setFemaleDestType('room')}
+                                  className={`py-1.5 px-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1 ${
+                                    femaleDestType === 'room'
+                                      ? 'bg-purple-600 text-white shadow-sm'
+                                      : 'bg-white border border-slate-200 text-slate-600'
+                                  }`}
+                                >
+                                  <Warehouse className="w-3 h-3" />
+                                  <span>عنابر أرضية</span>
+                                </button>
+                              </div>
+                            </div>
+
+                            {/* Destination Selection Inputs */}
+                            {femaleDestType === 'battery_tier' ? (
+                              <div className="space-y-2">
+                                <div className="grid grid-cols-2 gap-2">
+                                  <div>
+                                    <label className="block text-[10px] font-bold text-slate-600 mb-0.5">البطارية:</label>
+                                    <select
+                                      value={femaleSelectedBatteryId}
+                                      onChange={(e) => setFemaleSelectedBatteryId(e.target.value)}
+                                      className="w-full glass-input py-1.5 px-2 text-xs font-bold"
+                                    >
+                                      {batteries?.map((b) => (
+                                        <option key={b.id} value={b.id}>
+                                          بطارية ({b.name})
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                  <div>
+                                    <label className="block text-[10px] font-bold text-slate-600 mb-0.5">الدور / القفص:</label>
+                                    <select
+                                      value={femaleSelectedTierId}
+                                      onChange={(e) => setFemaleSelectedTierId(e.target.value)}
+                                      className="w-full glass-input py-1.5 px-2 text-xs font-bold"
+                                    >
+                                      {tiers
+                                        ?.filter((t) => t.batteryId === femaleSelectedBatteryId)
+                                        .map((t) => (
+                                          <option key={t.id} value={t.id}>
+                                            الدور {t.tierNumber} (مشغول: {t.femalesCount + t.malesCount}/{t.capacity})
+                                          </option>
+                                        ))}
+                                    </select>
+                                  </div>
+                                </div>
+
+                                {/* Tier Live Status Card */}
+                                {selectedFTier && (
+                                  <div className="p-2 rounded-xl bg-white border border-pink-200 text-[10px] flex items-center justify-between text-slate-600">
+                                    <span>
+                                      المشغول: <b>{selectedFTier.femalesCount} إناث</b> + <b>{selectedFTier.malesCount} ذكور</b>
+                                    </span>
+                                    <span>
+                                      الشاغر: <b className="font-mono text-emerald-700">{fTierRemainingSlots} طائر</b> (السعة: {fTierCap})
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+                            ) : (
+                              <div>
+                                <label className="block text-[10px] font-bold text-slate-600 mb-0.5">الغرفة / العنبر:</label>
+                                <select
+                                  value={femaleSelectedRoomId}
+                                  onChange={(e) => setFemaleSelectedRoomId(e.target.value)}
+                                  className="w-full glass-input py-1.5 px-2 text-xs font-bold"
+                                >
+                                  {rooms?.map((r) => (
+                                    <option key={r.id} value={r.id}>
+                                      {r.name} ({r.purpose === 'layers' ? 'أمهات بياض' : r.purpose}) - مشغول: {r.femalesCount + r.malesCount}/{r.capacity}
+                                    </option>
+                                  ))}
+                                </select>
+                                {selectedFRoom && (
+                                  <div className="p-2 rounded-xl bg-white border border-pink-200 text-[10px] flex items-center justify-between text-slate-600 mt-1.5">
+                                    <span>المشغول الحالي: <b>{selectedFRoom.femalesCount} إناث</b></span>
+                                    <span>الشاغر: <b className="font-mono text-emerald-700">{Math.max(0, selectedFRoom.capacity - (selectedFRoom.femalesCount + selectedFRoom.malesCount))}</b></span>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Box B: Male Transfer Section */}
+                      <div className={`p-4 rounded-3xl border transition-all ${
+                        transferMalesEnabled ? 'bg-sky-50/40 border-sky-300' : 'bg-slate-100/50 border-slate-200 opacity-60'
+                      }`}>
+                        <div className="flex items-center justify-between mb-3">
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={transferMalesEnabled}
+                              onChange={(e) => setTransferMalesEnabled(e.target.checked)}
+                              className="w-4 h-4 accent-sky-600 rounded cursor-pointer"
+                            />
+                            <span className="text-xs font-black text-sky-950">نقل ذكور مفروزة (♂)</span>
+                          </label>
+                          <span className="text-[10px] font-bold text-sky-800 bg-sky-100 px-2 py-0.5 rounded-full font-mono">
+                            المتاح للفرز: {mVal} ذكر
+                          </span>
+                        </div>
+
+                        {transferMalesEnabled && (
+                          <div className="space-y-3">
+                            {/* Quantity to transfer */}
+                            <div>
+                              <div className="flex items-center justify-between text-[11px] mb-1">
+                                <span className="font-bold text-slate-700">عدد الذكور المراد نقلها:</span>
+                                <div className="flex gap-1 text-[10px]">
+                                  <button
+                                    type="button"
+                                    onClick={() => setTransferMalesQty(Math.floor(mVal * 0.25))}
+                                    className="px-1.5 py-0.5 bg-white border border-sky-200 rounded text-sky-800 hover:bg-sky-100 font-bold"
+                                  >
+                                    25%
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setTransferMalesQty(Math.floor(mVal * 0.5))}
+                                    className="px-1.5 py-0.5 bg-white border border-sky-200 rounded text-sky-800 hover:bg-sky-100 font-bold"
+                                  >
+                                    50%
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setTransferMalesQty(mVal)}
+                                    className="px-1.5 py-0.5 bg-sky-600 text-white rounded font-bold"
+                                  >
+                                    الكل ({mVal})
+                                  </button>
+                                </div>
+                              </div>
+                              <input
+                                type="number"
+                                min="1"
+                                max={mVal}
+                                value={transferMalesQty}
+                                onChange={(e) => setTransferMalesQty(Math.max(0, Number(e.target.value)))}
+                                className={`w-full glass-input text-center font-mono font-black text-base text-sky-900 ${
+                                  isMTransferQtyInvalid ? 'border-rose-400 bg-rose-50' : ''
+                                }`}
+                              />
+                              <div className="flex justify-between text-[10px] text-slate-500 mt-1 font-medium">
+                                <span>سيتبقى بالتحضين: <b className="font-mono text-sky-800">{Math.max(0, mVal - transferMalesQty)}</b> ذكر</span>
+                                {mTransferQty > mVal && (
+                                  <span className="text-rose-600 font-bold">يتجاوز الذكور المتاحة!</span>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Destination Type Selector */}
+                            <div>
+                              <label className="block text-[11px] font-bold text-slate-700 mb-1">نوع وجهة الاستقبال:</label>
+                              <div className="grid grid-cols-2 gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => setMaleDestType('room')}
+                                  className={`py-1.5 px-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1 ${
+                                    maleDestType === 'room'
+                                      ? 'bg-sky-600 text-white shadow-sm'
+                                      : 'bg-white border border-slate-200 text-slate-600'
+                                  }`}
+                                >
+                                  <Warehouse className="w-3 h-3" />
+                                  <span>عنابر التسمين واللحوم</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setMaleDestType('battery_tier')}
+                                  className={`py-1.5 px-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1 ${
+                                    maleDestType === 'battery_tier'
+                                      ? 'bg-sky-600 text-white shadow-sm'
+                                      : 'bg-white border border-slate-200 text-slate-600'
+                                  }`}
+                                >
+                                  <Grid className="w-3 h-3" />
+                                  <span>عنبر البطاريات (تلقيح)</span>
+                                </button>
+                              </div>
+                            </div>
+
+                            {/* Destination Selection Inputs */}
+                            {maleDestType === 'room' ? (
+                              <div>
+                                <label className="block text-[10px] font-bold text-slate-600 mb-0.5">عنبر / غرفة التسمين:</label>
+                                <select
+                                  value={maleSelectedRoomId}
+                                  onChange={(e) => setMaleSelectedRoomId(e.target.value)}
+                                  className="w-full glass-input py-1.5 px-2 text-xs font-bold"
+                                >
+                                  {rooms?.map((r) => (
+                                    <option key={r.id} value={r.id}>
+                                      {r.name} ({r.purpose === 'fattening' ? 'تسمين لحم ⭐' : r.purpose}) - مشغول: {r.femalesCount + r.malesCount}/{r.capacity}
+                                    </option>
+                                  ))}
+                                </select>
+                                {selectedMRoom && (
+                                  <div className="p-2 rounded-xl bg-white border border-sky-200 text-[10px] flex items-center justify-between text-slate-600 mt-1.5">
+                                    <span>الذكور الحالية: <b>{selectedMRoom.malesCount} ذكر</b></span>
+                                    <span>الشاغر المتاح: <b className="font-mono text-emerald-700">{Math.max(0, selectedMRoom.capacity - (selectedMRoom.malesCount + selectedMRoom.femalesCount))}</b></span>
+                                  </div>
+                                )}
+                              </div>
+                            ) : (
+                              <div className="space-y-2">
+                                <div className="grid grid-cols-2 gap-2">
+                                  <div>
+                                    <label className="block text-[10px] font-bold text-slate-600 mb-0.5">البطارية:</label>
+                                    <select
+                                      value={maleSelectedBatteryId}
+                                      onChange={(e) => setMaleSelectedBatteryId(e.target.value)}
+                                      className="w-full glass-input py-1.5 px-2 text-xs font-bold"
+                                    >
+                                      {batteries?.map((b) => (
+                                        <option key={b.id} value={b.id}>
+                                          بطارية ({b.name})
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                  <div>
+                                    <label className="block text-[10px] font-bold text-slate-600 mb-0.5">الدور / القفص:</label>
+                                    <select
+                                      value={maleSelectedTierId}
+                                      onChange={(e) => setMaleSelectedTierId(e.target.value)}
+                                      className="w-full glass-input py-1.5 px-2 text-xs font-bold"
+                                    >
+                                      {tiers
+                                        ?.filter((t) => t.batteryId === maleSelectedBatteryId)
+                                        .map((t) => (
+                                          <option key={t.id} value={t.id}>
+                                            الدور {t.tierNumber} (مشغول: {t.femalesCount + t.malesCount}/{t.capacity})
+                                          </option>
+                                        ))}
+                                    </select>
+                                  </div>
+                                </div>
+                                {selectedMTier && (
+                                  <div className="p-2 rounded-xl bg-white border border-sky-200 text-[10px] flex items-center justify-between text-slate-600">
+                                    <span>المشغول الحالي: <b>{selectedMTier.malesCount} ذكور</b></span>
+                                    <span>الشاغر المتاح: <b className="font-mono text-emerald-700">{Math.max(0, selectedMTier.capacity - (selectedMTier.femalesCount + selectedMTier.malesCount))} طائر</b></span>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Operation Notes Input */}
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">ملاحظات الفرز والنقل (اختياري):</label>
+                    <input
+                      type="text"
+                      value={sexingNotes}
+                      onChange={(e) => setSexingNotes(e.target.value)}
+                      placeholder="مثال: تم فرز وتسكين أمهات بياض للدور 2 ونقل الذكور لغرفة 4..."
+                      className="w-full glass-input text-xs"
+                    />
+                  </div>
+
+                  {/* Impact & Balance Preview Footer */}
+                  <div className="p-4 rounded-3xl bg-indigo-50/70 border border-indigo-200/90 text-xs space-y-2">
+                    <div className="flex items-center justify-between font-bold text-indigo-950">
+                      <span>ملخص التأثير اللحظي على القطيع:</span>
+                      <span className="font-mono text-[11px]">
+                        المنقول الآن: <b className="text-emerald-700">{totalPlannedTransfer}</b> طائر
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
+                      <div className="p-2 rounded-xl bg-white border border-indigo-100">
+                        <span className="text-slate-500 block text-[10px]">الدفعة قبل النقل:</span>
+                        <b className="font-mono text-slate-800 text-xs">{currentLive} كتكوت</b>
+                      </div>
+                      <div className="p-2 rounded-xl bg-white border border-indigo-100">
+                        <span className="text-slate-500 block text-[10px]">إناث منقولة:</span>
+                        <b className="font-mono text-pink-700 text-xs">
+                          {transferFemalesEnabled ? fTransferQty : 0} أنثى
+                        </b>
+                      </div>
+                      <div className="p-2 rounded-xl bg-white border border-indigo-100">
+                        <span className="text-slate-500 block text-[10px]">ذكور منقولة:</span>
+                        <b className="font-mono text-sky-700 text-xs">
+                          {transferMalesEnabled ? mTransferQty : 0} ذكر
+                        </b>
+                      </div>
+                      <div className="p-2 rounded-xl bg-white border border-indigo-100">
+                        <span className="text-slate-500 block text-[10px]">المتبقي بالحضانة:</span>
+                        <b className="font-mono text-indigo-900 text-xs">
+                          {Math.max(0, currentLive - totalPlannedTransfer - mortVal)} كتكوت
+                        </b>
+                      </div>
+                    </div>
+
+                    <div className="text-[10px] text-indigo-900/80 font-medium pt-1">
+                      {currentLive - totalPlannedTransfer - mortVal === 0 ? (
+                        <span>🎉 ستتخرج الدفعة وتكتمل بالكامل من قسم التحضين (حالة الدفعة ستصبح: متخرجة Graduated).</span>
+                      ) : (
+                        <span>📌 ستظل الدفعة نشطة بالتحضين ويتم خفض استهلاك العلف اليومي تلقائياً بناءً على الرصيد المتبقي ({currentLive - totalPlannedTransfer - mortVal} كتكوت).</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Submit Actions */}
+                  <div className="flex gap-2 pt-2 border-t border-slate-100">
+                    <button
+                      type="submit"
+                      disabled={!canSubmit}
+                      className={`flex-1 py-3 rounded-2xl font-black text-xs shadow-sm transition-all flex items-center justify-center gap-2 ${
+                        canSubmit
+                          ? 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white cursor-pointer'
+                          : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                      }`}
+                    >
+                      <Split className="w-4 h-4" />
+                      <span>⚡ اعتماد الفرز وتنفيذ النقل الجزئي للقطيع</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveBatchForSexing(null)}
+                      className="px-5 py-3 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition-all"
+                    >
+                      إلغاء
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Modal: Add New Brooding Batch */}
       {showAddBroodModal && (

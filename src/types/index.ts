@@ -228,9 +228,9 @@ export interface BroodingBatch {
   source: string; // تفريخ داخلي، شراء كتاكيت
   hatchDate: string; // YYYY-MM-DD تاريخ الفقس وبدء التحضين
   initialChicksCount: number; // العدد الأولي
-  currentChicksCount: number; // العدد الحي الحالي
+  currentChicksCount: number; // العدد الحي الحالي المتبقي في التحضين
   mortalityCount: number; // عدد النفوق التراكمي
-  sexType: 'unsexed'; // دائماً مختلط الجنسين (Unsexed)
+  sexType: 'unsexed'; // دائماً مختلط الجنسين (Unsexed) قبل الفرز
   locationName: string; // اسم الحضانة أو الغرفة أو البطارية
   selectedFeedType: FeedType; // 'starter_24_27' أو 'grower_fattening'
   targetWeightGrams?: number; // الوزن المستهدف (اختياري)
@@ -241,6 +241,32 @@ export interface BroodingBatch {
   notes?: string;
   createdAt: string;
   updatedAt: string;
+
+  // Sexing & Partial Transfer Tracking (فرز الجنسين والنقل الجزئي للقطيع)
+  sexedFemalesCount?: number; // عدد الإناث المفروزة المتبقية حالياً بالتحضين
+  sexedMalesCount?: number;   // عدد الذكور المفروزة المتبقية حالياً بالتحضين
+  unsexedCount?: number;      // عدد الكتاكيت غير المميزة المتبقية بالتحضين
+  transferredFemalesCount?: number; // إجمالي الإناث المنقولة تراكمياً إلى العنابر
+  transferredMalesCount?: number;   // إجمالي الذكور المنقولة تراكمياً إلى العنابر
+  lastSexingDate?: string;    // تاريخ آخر عملية فرز
+}
+
+export type TransferDestinationType = 'battery_tier' | 'room' | 'fattening_batch';
+
+export interface FlockTransferRecord {
+  id: string;
+  date: string; // YYYY-MM-DD
+  time: string; // HH:mm
+  batchId: string;
+  batchNumber: string;
+  gender: 'female' | 'male' | 'unsexed';
+  quantity: number;
+  destinationType: TransferDestinationType;
+  destinationId: string; // tierId, roomId, or fatteningBatchId
+  destinationName: string; // e.g. "بطارية أ - الدور 2" or "غرفة 4 (تسمين)"
+  notes?: string;
+  recordedBy: string;
+  createdAt: string;
 }
 
 export const DEFAULT_BROODING_RATES: BroodingWeeklyRate[] = [

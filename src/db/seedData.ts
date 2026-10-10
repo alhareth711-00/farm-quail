@@ -1497,6 +1497,7 @@ export async function clearDemoTransactionsForLiveProduction(
   await db.medicationSchedules.clear();
   await db.incubationBatches.clear();
   await db.broodingBatches.clear();
+  await db.flockTransfers.clear();
   await db.fatteningBatches.clear();
   await db.fatteningWeights.clear();
   await db.slaughterRecords.clear();
