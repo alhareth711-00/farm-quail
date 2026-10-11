@@ -1977,7 +1977,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
                           <input
                             type="number"
                             min="1"
-                            step="100"
+                            step="any"
                             required
                             value={feedCostPerBag}
                             onChange={(e) => {

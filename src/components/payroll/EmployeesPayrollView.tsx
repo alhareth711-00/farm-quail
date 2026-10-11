@@ -14,6 +14,8 @@ import {
   Users,
   UserPlus,
   Calendar,
+  CalendarDays,
+  CalendarCheck,
   DollarSign,
   Clock,
   CheckCircle2,
@@ -38,15 +40,26 @@ import {
   Phone,
   Calculator,
   RotateCcw,
+  FileSpreadsheet,
+  Info,
+  ListOrdered,
+  Filter,
 } from 'lucide-react';
 
 export const EmployeesPayrollView: React.FC = () => {
   const { farmSettings, userName } = useAuth();
   const { toast } = useToast();
 
-  // Selected Month (YYYY-MM)
-  const currentMonth = new Date().toISOString().slice(0, 7);
+  // Selected Month (YYYY-MM) and As-of-Date (YYYY-MM-DD)
+  const todayDateStr = new Date().toISOString().split('T')[0];
+  const currentMonth = todayDateStr.slice(0, 7);
   const [selectedMonth, setSelectedMonth] = useState<string>(currentMonth);
+
+  // As-of Date state for calculating payroll strictly up to today / specified cutoff date
+  const [asOfDate, setAsOfDate] = useState<string>(todayDateStr);
+  const [showAsOfBreakdownModal, setShowAsOfBreakdownModal] = useState<boolean>(false);
+  const [breakdownEmployeeFilter, setBreakdownEmployeeFilter] = useState<string>('all');
+  const [breakdownTab, setBreakdownTab] = useState<'all' | 'summary' | 'attendance' | 'advances'>('all');
 
   // Active Sub-tab
   const [activeTab, setActiveTab] = useState<'ledger' | 'attendance' | 'advances' | 'employees'>('ledger');
@@ -65,6 +78,62 @@ export const EmployeesPayrollView: React.FC = () => {
   const monthAdvances = useMemo(() => {
     return allAdvances.filter((a) => a.date.startsWith(selectedMonth));
   }, [allAdvances, selectedMonth]);
+
+  // Attendance and advances strictly up to asOfDate in the selected month
+  const allAttendanceToDate = useMemo(() => {
+    return monthAttendance.filter((a) => a.date <= asOfDate);
+  }, [monthAttendance, asOfDate]);
+
+  const allAdvancesToDate = useMemo(() => {
+    return monthAdvances.filter((a) => a.date <= asOfDate);
+  }, [monthAdvances, asOfDate]);
+
+  // Days in selected month
+  const [selYear, selMonth] = selectedMonth.split('-').map(Number);
+  const daysInMonth = new Date(selYear, selMonth, 0).getDate();
+
+  // Day cutoff in the selected month:
+  const asOfDay = useMemo(() => {
+    if (asOfDate.startsWith(selectedMonth)) {
+      const dayNum = parseInt(asOfDate.split('-')[2], 10);
+      return Math.min(Math.max(1, dayNum), daysInMonth);
+    }
+    // If viewing past month and asOfDate is outside it:
+    if (selectedMonth < currentMonth) {
+      return daysInMonth;
+    }
+    return 1;
+  }, [asOfDate, selectedMonth, daysInMonth, currentMonth]);
+
+  const handleAsOfDateChange = (newDate: string) => {
+    if (!newDate) return;
+    setAsOfDate(newDate);
+    const newMonth = newDate.slice(0, 7);
+    if (newMonth !== selectedMonth) {
+      setSelectedMonth(newMonth);
+    }
+  };
+
+  const handleSetToday = () => {
+    setAsOfDate(todayDateStr);
+    setSelectedMonth(todayDateStr.slice(0, 7));
+  };
+
+  // Month navigation helper
+  const navigateMonth = (direction: 'prev' | 'next') => {
+    const [year, month] = selectedMonth.split('-').map(Number);
+    const date = new Date(year, month - 1 + (direction === 'next' ? 1 : -1), 1);
+    const newMonthStr = date.toISOString().slice(0, 7);
+    setSelectedMonth(newMonthStr);
+    if (newMonthStr === currentMonth) {
+      setAsOfDate(todayDateStr);
+    } else {
+      const y = date.getFullYear();
+      const m = date.getMonth() + 1;
+      const lastDay = new Date(y, m, 0).getDate();
+      setAsOfDate(`${newMonthStr}-${String(lastDay).padStart(2, '0')}`);
+    }
+  };
 
   // Modal States
   const [showAddEmployeeModal, setShowAddEmployeeModal] = useState(false);
@@ -109,48 +178,85 @@ export const EmployeesPayrollView: React.FC = () => {
     }
   };
 
-  // Automated Payroll Ledger Calculations for each Employee
+  // Automated Payroll Ledger Calculations for each Employee up to asOfDate
   const payrollLedger = useMemo(() => {
     return employees.map((emp) => {
-      const empAttendance = monthAttendance.filter((a) => a.employeeId === emp.id);
-      const fullAbsences = empAttendance.filter((a) => a.status === 'absent_full');
-      const halfDays = empAttendance.filter((a) => a.status === 'half_day');
-      const fullDaysPresent = empAttendance.filter((a) => a.status === 'present_full');
+      // 1. All records for the selected month
+      const empAttendanceMonth = monthAttendance.filter((a) => a.employeeId === emp.id);
+      const empAdvancesMonth = monthAdvances.filter((a) => a.employeeId === emp.id);
 
-      const totalDeductions = empAttendance.reduce((acc, a) => acc + (a.deductionAmount || 0), 0);
-      const empAdvances = monthAdvances.filter((a) => a.employeeId === emp.id);
-      const totalAdvances = empAdvances.reduce((acc, a) => acc + a.amount, 0);
+      // 2. Records strictly up to asOfDate (Cutoff)
+      const empAttendanceToDate = empAttendanceMonth.filter((a) => a.date <= asOfDate);
+      const empAdvancesToDate = empAdvancesMonth.filter((a) => a.date <= asOfDate);
 
-      // (الراتب الأساسي - إجمالي الخصومات والغيابات - إجمالي السحبيات = المتبقي من الراتب)
-      const netRemaining = emp.monthlySalary - totalDeductions - totalAdvances;
+      // Attendance breakdown up to asOfDate
+      const fullAbsencesToDate = empAttendanceToDate.filter((a) => a.status === 'absent_full');
+      const halfDaysToDate = empAttendanceToDate.filter((a) => a.status === 'half_day');
+      const fullPresentToDate = empAttendanceToDate.filter((a) => a.status === 'present_full');
+
+      // Deductions and Advances up to asOfDate
+      const totalDeductionsToDate = empAttendanceToDate.reduce((acc, a) => acc + (a.deductionAmount || 0), 0);
+      const totalAdvancesToDate = empAdvancesToDate.reduce((acc, a) => acc + a.amount, 0);
+
+      // Calculate eligible days worked up to asOfDate:
+      let eligibleDays = asOfDay;
+      if (emp.hireDate && emp.hireDate.startsWith(selectedMonth)) {
+        const hireDay = parseInt(emp.hireDate.split('-')[2], 10);
+        eligibleDays = Math.max(0, Math.min(asOfDay, daysInMonth) - hireDay + 1);
+      } else if (emp.hireDate && emp.hireDate > asOfDate) {
+        eligibleDays = 0;
+      }
+
+      // Effective days worked (subtracting full absences and half-days)
+      const effectiveDaysWorked = Math.max(0, eligibleDays - fullAbsencesToDate.length - (halfDaysToDate.length * 0.5));
+
+      // Gross earned salary up to asOfDate:
+      const grossEarnedToDate = eligibleDays >= daysInMonth ? emp.monthlySalary : Math.round(eligibleDays * emp.dailyWage);
+
+      // Earned salary up to asOfDate after deducting absences / half days
+      const earnedSalaryToDate = Math.max(0, grossEarnedToDate - totalDeductionsToDate);
+
+      // المتبقي من الراتب حتى تاريخ اليوم الذي داوم فيه وليس إلى نهاية الشهر
+      const netRemainingToDate = earnedSalaryToDate - totalAdvancesToDate;
+
+      // Full Month Projections (End of Month)
+      const fullMonthDeductions = empAttendanceMonth.reduce((acc, a) => acc + (a.deductionAmount || 0), 0);
+      const fullMonthAdvances = empAdvancesMonth.reduce((acc, a) => acc + a.amount, 0);
+      const fullMonthNetRemaining = emp.monthlySalary - fullMonthDeductions - fullMonthAdvances;
 
       return {
         employee: emp,
-        fullAbsencesCount: fullAbsences.length,
-        halfDaysCount: halfDays.length,
-        fullPresentCount: fullDaysPresent.length,
-        totalDeductions,
-        totalAdvances,
-        netRemaining,
-        empAttendance,
-        empAdvances,
+        eligibleDays,
+        effectiveDaysWorked,
+        grossEarnedToDate,
+        earnedSalaryToDate,
+        fullAbsencesCount: fullAbsencesToDate.length,
+        halfDaysCount: halfDaysToDate.length,
+        fullPresentCount: fullPresentToDate.length,
+        totalDeductions: totalDeductionsToDate,
+        totalAdvances: totalAdvancesToDate,
+        netRemainingToDate,
+        // Full month fields
+        fullMonthDeductions,
+        fullMonthAdvances,
+        fullMonthNetRemaining,
+        // Lists
+        empAttendanceToDate,
+        empAdvancesToDate,
+        empAttendanceMonth,
+        empAdvancesMonth,
       };
     });
-  }, [employees, monthAttendance, monthAdvances]);
+  }, [employees, monthAttendance, monthAdvances, asOfDate, asOfDay, daysInMonth, selectedMonth]);
 
-  // Overall Month Statistics
+  // Overall Month & As-of-Date Statistics
   const activeEmployees = employees.filter((e) => e.status === 'active');
   const totalBaseSalaries = activeEmployees.reduce((acc, e) => acc + e.monthlySalary, 0);
-  const totalMonthDeductions = payrollLedger.reduce((acc, p) => acc + p.totalDeductions, 0);
-  const totalMonthAdvances = payrollLedger.reduce((acc, p) => acc + p.totalAdvances, 0);
-  const totalNetRemaining = payrollLedger.reduce((acc, p) => acc + p.netRemaining, 0);
-
-  // Month navigation helper
-  const navigateMonth = (direction: 'prev' | 'next') => {
-    const [year, month] = selectedMonth.split('-').map(Number);
-    const date = new Date(year, month - 1 + (direction === 'next' ? 1 : -1), 1);
-    setSelectedMonth(date.toISOString().slice(0, 7));
-  };
+  const totalEarnedToDate = payrollLedger.reduce((acc, p) => acc + p.earnedSalaryToDate, 0);
+  const totalDeductionsToDate = payrollLedger.reduce((acc, p) => acc + p.totalDeductions, 0);
+  const totalAdvancesToDate = payrollLedger.reduce((acc, p) => acc + p.totalAdvances, 0);
+  const totalNetRemainingToDate = payrollLedger.reduce((acc, p) => acc + p.netRemainingToDate, 0);
+  const totalFullMonthNetRemaining = payrollLedger.reduce((acc, p) => acc + p.fullMonthNetRemaining, 0);
 
   // --- 1. Handlers: Employee CRUD ---
   const handleOpenAddEmployee = () => {
@@ -496,7 +602,7 @@ export const EmployeesPayrollView: React.FC = () => {
         </div>
       </div>
 
-      {/* KPI Cards: Automated Payroll Summary for Selected Month */}
+      {/* KPI Cards: Automated Payroll Summary for Selected Month & As-of-Date */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* 1. Base Salaries */}
         <div className="p-5 rounded-3xl glass-card border border-slate-200/80 bg-white shadow-xs">
@@ -509,66 +615,68 @@ export const EmployeesPayrollView: React.FC = () => {
           <div className="text-2xl font-black text-slate-900 font-mono">
             {totalBaseSalaries.toLocaleString('ar-SA')} {farmSettings.currency}
           </div>
-          <div className="text-[11px] text-slate-500 mt-1">
-            عدد الكادر النشط: <b className="font-mono text-slate-800">{activeEmployees.length}</b> موظف
+          <div className="text-[11px] text-slate-500 mt-1 flex items-center justify-between">
+            <span>عدد الكادر: <b className="font-mono text-slate-800">{activeEmployees.length}</b> موظف</span>
+            <span className="text-indigo-600 font-bold">المستحق لليوم: {totalEarnedToDate.toLocaleString('ar-SA')}</span>
           </div>
         </div>
 
-        {/* 2. Absence & Half-day Deductions */}
+        {/* 2. Absence & Half-day Deductions to Date */}
         <div className="p-5 rounded-3xl glass-card border border-rose-200/80 bg-rose-50/30 shadow-xs">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-bold text-rose-900">إجمالي خصومات الغياب ونصف الدوام</span>
+            <span className="text-xs font-bold text-rose-900">خصومات الغياب ونصف الدوام (حتى اليوم)</span>
             <div className="w-8 h-8 rounded-xl bg-rose-500 text-white flex items-center justify-center font-bold">
               <TrendingDown className="w-4 h-4" />
             </div>
           </div>
           <div className="text-2xl font-black text-rose-950 font-mono">
-            -{totalMonthDeductions.toLocaleString('ar-SA')} {farmSettings.currency}
+            -{totalDeductionsToDate.toLocaleString('ar-SA')} {farmSettings.currency}
           </div>
           <div className="text-[11px] text-rose-800 mt-1">
-            مخصومة آلياً بناءً على اليوميات المقررة
+            مخصومة آلياً بناءً على اليوميات حتى {asOfDate}
           </div>
         </div>
 
-        {/* 3. Cash Advances */}
+        {/* 3. Cash Advances to Date */}
         <div className="p-5 rounded-3xl glass-card border border-amber-200/80 bg-amber-50/30 shadow-xs">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-bold text-amber-900">إجمالي السحبيات النقدية المصروفة</span>
+            <span className="text-xs font-bold text-amber-900">السحبيات النقدية المصروفة (حتى اليوم)</span>
             <div className="w-8 h-8 rounded-xl bg-amber-500 text-white flex items-center justify-center font-bold">
               <Wallet className="w-4 h-4" />
             </div>
           </div>
           <div className="text-2xl font-black text-amber-950 font-mono">
-            -{totalMonthAdvances.toLocaleString('ar-SA')} {farmSettings.currency}
+            -{totalAdvancesToDate.toLocaleString('ar-SA')} {farmSettings.currency}
           </div>
           <div className="text-[11px] text-amber-800 mt-1">
-            عدد سندات السحب: <b className="font-mono">{monthAdvances.length}</b> عملية سحب
+            عدد السحبيات حتى اليوم: <b className="font-mono">{allAdvancesToDate.length}</b> عملية سحب
           </div>
         </div>
 
-        {/* 4. Net Remaining Salaries */}
+        {/* 4. Net Remaining Salaries to Date */}
         <div
           className={`p-5 rounded-3xl glass-card border shadow-xs ${
-            totalNetRemaining >= 0
+            totalNetRemainingToDate >= 0
               ? 'border-emerald-200/80 bg-emerald-50/40 text-emerald-950'
               : 'border-rose-200/80 bg-rose-50/40 text-rose-950'
           }`}
         >
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-bold">المتبقي من الرواتب المستحقة للصرف</span>
+            <span className="text-xs font-bold">المتبقي من الراتب (حتى تاريخ اليوم)</span>
             <div
               className={`w-8 h-8 rounded-xl flex items-center justify-center text-white ${
-                totalNetRemaining >= 0 ? 'bg-emerald-600' : 'bg-rose-600'
+                totalNetRemainingToDate >= 0 ? 'bg-emerald-600' : 'bg-rose-600'
               }`}
             >
               <DollarSign className="w-4 h-4 stroke-[3]" />
             </div>
           </div>
           <div className="text-2xl font-black font-mono">
-            {totalNetRemaining.toLocaleString('ar-SA')} {farmSettings.currency}
+            {totalNetRemainingToDate.toLocaleString('ar-SA')} {farmSettings.currency}
           </div>
-          <div className="text-[11px] mt-1 font-bold opacity-85">
-            {totalNetRemaining >= 0 ? 'مستحقات واجبة الصرف نهاية الشهر' : 'تجاوز بالسحبيات مستحق للمزرعة'}
+          <div className="text-[11px] mt-1 font-bold opacity-85 flex items-center justify-between">
+            <span>{totalNetRemainingToDate >= 0 ? `مستحق الصرف حتى يوم ${asOfDay}` : 'تجاوز بالسحبيات'}</span>
+            <span className="text-[10px] opacity-75 font-normal">(نهاية الشهر: {totalFullMonthNetRemaining.toLocaleString('ar-SA')})</span>
           </div>
         </div>
       </div>
@@ -670,7 +778,7 @@ export const EmployeesPayrollView: React.FC = () => {
                   <span>جدول مسير الرواتب والاحتساب الآلي لشهر ({selectedMonth})</span>
                 </h3>
                 <p className="text-[11px] text-slate-500 mt-0.5">
-                  معادلة الاحتساب الآلي: <b>(الراتب الأساسي - إجمالي الخصومات والغيابات - إجمالي السحبيات = المتبقي من الراتب)</b>
+                  معادلة الاحتساب حتى تاريخ اليوم: <b>(الراتب المستحق عن الأيام المداومة حتى اليوم - خصومات الغياب - السحبيات = المتبقي من الراتب حتى تاريخ اليوم)</b>
                 </p>
               </div>
 
@@ -679,18 +787,86 @@ export const EmployeesPayrollView: React.FC = () => {
               </div>
             </div>
 
+            {/* As-Of Date & Operations Controls Banner */}
+            <div className="p-4 rounded-2xl bg-gradient-to-r from-indigo-50/90 via-slate-50 to-blue-50/80 border border-indigo-100 flex flex-wrap items-center justify-between gap-3 shadow-2xs">
+              <div className="flex flex-wrap items-center gap-2.5">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-xl bg-indigo-600 text-white flex items-center justify-center shadow-xs">
+                    <Calendar className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <span className="text-xs font-black text-slate-800 block">
+                      تحديد تاريخ اليوم لاحتساب الرواتب (As-of Date):
+                    </span>
+                    <span className="text-[10px] text-slate-500">
+                      يُحسب استحقاق الموظفين والسحبيات والغياب حتى هذا التاريخ بدقة
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1.5 bg-white border border-indigo-200 rounded-xl px-2.5 py-1.5 shadow-2xs">
+                  <input
+                    type="date"
+                    value={asOfDate}
+                    onChange={(e) => handleAsOfDateChange(e.target.value)}
+                    className="text-xs font-mono font-black text-slate-800 bg-transparent outline-none cursor-pointer"
+                  />
+                </div>
+
+                <button
+                  onClick={handleSetToday}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all flex items-center gap-1 ${
+                    asOfDate === todayDateStr
+                      ? 'bg-indigo-600 text-white shadow-xs'
+                      : 'bg-white hover:bg-indigo-50 text-indigo-700 border border-indigo-200'
+                  }`}
+                  title="ضبط تاريخ الاحتساب على اليوم الحالي"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>اليوم الحالي ({todayDateStr})</span>
+                </button>
+
+                <div className="text-[11px] font-bold text-indigo-900 bg-indigo-100/70 px-2.5 py-1 rounded-xl">
+                  اليوم الـ {asOfDay} من شهر ({selectedMonth})
+                </div>
+              </div>
+
+              {/* Dedicated Button / Icon to Open the Operations Breakdown Modal */}
+              <button
+                onClick={() => {
+                  setBreakdownEmployeeFilter('all');
+                  setShowAsOfBreakdownModal(true);
+                }}
+                className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 text-white text-xs font-black flex items-center gap-2 shadow-sm transition-all"
+                title="عرض كافة العمليات التي تم احتسابها حتى هذا التاريخ من غياب وحضور وسحبيات"
+              >
+                <FileSpreadsheet className="w-4 h-4" />
+                <span>عرض كافة العمليات المحتسبة حتى تاريخ اليوم 📋</span>
+              </button>
+            </div>
+
             <div className="overflow-x-auto">
               <table className="w-full text-right text-xs">
                 <thead className="bg-slate-100/75 border-b border-slate-200 text-slate-600 font-extrabold uppercase tracking-wider">
                   <tr>
                     <th className="p-3.5">الموظف والمسمى</th>
-                    <th className="p-3.5 text-center">الراتب الأساسي</th>
+                    <th className="p-3.5 text-center">الراتب الشهري</th>
                     <th className="p-3.5 text-center">قيمة اليومية</th>
-                    <th className="p-3.5 text-center">أيام الغياب ونصف الدوام</th>
-                    <th className="p-3.5 text-center text-rose-700">إجمالي الخصومات (-)</th>
-                    <th className="p-3.5 text-center text-amber-700">إجمالي السحبيات (-)</th>
-                    <th className="p-3.5 text-center text-emerald-800">المتبقي من الراتب (=)</th>
-                    <th className="p-3.5 text-center">كشف الحساب والإجراءات</th>
+                    <th className="p-3.5 text-center">الدوام والغياب حتى اليوم</th>
+                    <th className="p-3.5 text-center text-rose-700">الخصومات حتى اليوم (-)</th>
+                    <th className="p-3.5 text-center text-amber-700">السحبيات حتى اليوم (-)</th>
+                    <th className="p-3.5 text-center text-emerald-800">
+                      <div className="flex flex-col items-center">
+                        <span className="flex items-center gap-1">
+                          <DollarSign className="w-4 h-4 text-emerald-600" />
+                          <span>المتبقي من الراتب حتى تاريخ اليوم (=)</span>
+                        </span>
+                        <span className="text-[10px] text-slate-500 font-normal">
+                          مستحق حتى يوم {asOfDay} ({asOfDate})
+                        </span>
+                      </div>
+                    </th>
+                    <th className="p-3.5 text-center">كشف الحساب والعمليات</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -713,56 +889,70 @@ export const EmployeesPayrollView: React.FC = () => {
                           {item.employee.dailyWage.toLocaleString('ar-SA')} {farmSettings.currency}
                         </td>
 
-                        {/* Absences Breakdown Badges */}
+                        {/* Attendance Breakdown Badges up to As-Of-Date */}
                         <td className="p-3.5 text-center">
                           <div className="flex items-center justify-center gap-1.5 flex-wrap">
-                            {item.fullAbsencesCount > 0 ? (
+                            <span className="px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 font-black text-[10px]">
+                              {item.effectiveDaysWorked} يوم عمل
+                            </span>
+
+                            {item.fullAbsencesCount > 0 && (
                               <span className="px-2 py-0.5 rounded-md bg-rose-100 text-rose-800 font-black text-[10px]">
                                 {item.fullAbsencesCount} غياب كامل
                               </span>
-                            ) : null}
+                            )}
 
-                            {item.halfDaysCount > 0 ? (
+                            {item.halfDaysCount > 0 && (
                               <span className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 font-black text-[10px]">
                                 {item.halfDaysCount} نصف دوام
                               </span>
-                            ) : null}
+                            )}
 
-                            {item.fullAbsencesCount === 0 && item.halfDaysCount === 0 ? (
+                            {item.fullAbsencesCount === 0 && item.halfDaysCount === 0 && (
                               <span className="px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 font-bold text-[10px]">
-                                لا يوجد غياب
+                                دوام منتظم
                               </span>
-                            ) : null}
+                            )}
                           </div>
                         </td>
 
-                        {/* Total Deductions */}
+                        {/* Total Deductions to Date */}
                         <td className="p-3.5 text-center font-mono font-black text-rose-700 text-sm">
                           {item.totalDeductions > 0
                             ? `-${item.totalDeductions.toLocaleString('ar-SA')} ${farmSettings.currency}`
                             : '0'}
                         </td>
 
-                        {/* Total Advances */}
+                        {/* Total Advances to Date */}
                         <td className="p-3.5 text-center font-mono font-black text-amber-700 text-sm">
                           {item.totalAdvances > 0
                             ? `-${item.totalAdvances.toLocaleString('ar-SA')} ${farmSettings.currency}`
                             : '0'}
                         </td>
 
-                        {/* Net Remaining Salary */}
+                        {/* Net Remaining Salary to Date (Calculated strictly up to date worked) */}
                         <td className="p-3.5 text-center">
-                          <span
-                            className={`px-3 py-1 rounded-xl font-mono font-black text-sm inline-block ${
-                              item.netRemaining > 0
-                                ? 'bg-emerald-100 text-emerald-900 border border-emerald-300'
-                                : item.netRemaining === 0
-                                ? 'bg-slate-100 text-slate-700'
-                                : 'bg-rose-100 text-rose-900 border border-rose-300'
-                            }`}
-                          >
-                            {item.netRemaining.toLocaleString('ar-SA')} {farmSettings.currency}
-                          </span>
+                          <div className="flex flex-col items-center">
+                            <span
+                              className={`px-3 py-1 rounded-xl font-mono font-black text-sm inline-block ${
+                                item.netRemainingToDate > 0
+                                  ? 'bg-emerald-100 text-emerald-900 border border-emerald-300'
+                                  : item.netRemainingToDate === 0
+                                  ? 'bg-slate-100 text-slate-700'
+                                  : 'bg-rose-100 text-rose-900 border border-rose-300'
+                              }`}
+                            >
+                              {item.netRemainingToDate.toLocaleString('ar-SA')} {farmSettings.currency}
+                            </span>
+                            <div className="text-[10px] text-slate-500 mt-1 flex items-center gap-1 font-semibold">
+                              <span>مستحق لليوم: {item.earnedSalaryToDate.toLocaleString('ar-SA')}</span>
+                            </div>
+                            {item.fullMonthNetRemaining !== item.netRemainingToDate && (
+                              <span className="text-[9px] text-slate-400 mt-0.5">
+                                (المتبقي لنهاية الشهر: {item.fullMonthNetRemaining.toLocaleString('ar-SA')})
+                              </span>
+                            )}
+                          </div>
                         </td>
 
                         {/* Actions */}
@@ -770,11 +960,22 @@ export const EmployeesPayrollView: React.FC = () => {
                           <div className="flex items-center justify-center gap-1.5">
                             <button
                               onClick={() => setSelectedEmployeeForStatement(item.employee)}
-                              className="px-2.5 py-1 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-[11px] flex items-center gap-1 transition-colors border border-indigo-200"
+                              className="px-2 py-1 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-[11px] flex items-center gap-1 transition-colors border border-indigo-200"
                               title="عرض كشف حساب ومسير راتب مفصل للموظف"
                             >
                               <FileText className="w-3.5 h-3.5" />
                               <span>كشف راتب</span>
+                            </button>
+
+                            <button
+                              onClick={() => {
+                                setBreakdownEmployeeFilter(item.employee.id);
+                                setShowAsOfBreakdownModal(true);
+                              }}
+                              className="p-1 rounded-lg text-indigo-600 hover:bg-indigo-50 border border-indigo-200/60"
+                              title="عرض كافة عمليات الموظف المحتسبة حتى تاريخ اليوم"
+                            >
+                              <CalendarDays className="w-4 h-4" />
                             </button>
 
                             <button
@@ -1643,31 +1844,52 @@ export const EmployeesPayrollView: React.FC = () => {
 
               return (
                 <div className="space-y-4">
-                  {/* Summary Bar */}
-                  <div className="grid grid-cols-4 gap-2 text-center p-3 rounded-2xl bg-indigo-50/70 border border-indigo-200 text-xs">
-                    <div>
-                      <span className="text-slate-500 block text-[10px]">الراتب الأساسي</span>
-                      <b className="font-mono text-slate-900">
-                        {ledgerItem.employee.monthlySalary.toLocaleString('ar-SA')}
-                      </b>
+                  {/* Summary Bar - Up to As-of Date & Month Projections */}
+                  <div className="space-y-3">
+                    <div className="p-3.5 rounded-2xl bg-indigo-50/80 border border-indigo-200 text-xs">
+                      <div className="flex items-center justify-between font-black text-indigo-950 mb-2">
+                        <span className="flex items-center gap-1.5">
+                          <Clock className="w-4 h-4 text-indigo-600" />
+                          <span>الاحتساب الفعلي المستحق حتى تاريخ اليوم ({asOfDate})</span>
+                        </span>
+                        <span className="px-2.5 py-0.5 rounded-lg bg-indigo-200/80 text-indigo-900 font-bold text-[11px]">
+                          عن {ledgerItem.effectiveDaysWorked} يوم عمل من أصل {ledgerItem.eligibleDays} يوم
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
+                        <div className="bg-white/90 p-2.5 rounded-xl border border-indigo-100">
+                          <span className="text-slate-500 block text-[10px]">الراتب المستحق لليوم</span>
+                          <b className="font-mono text-indigo-700 text-xs font-black">
+                            {ledgerItem.earnedSalaryToDate.toLocaleString('ar-SA')} {farmSettings.currency}
+                          </b>
+                        </div>
+                        <div className="bg-white/90 p-2.5 rounded-xl border border-rose-100">
+                          <span className="text-rose-700 block text-[10px]">(-) خصومات الغياب لليوم</span>
+                          <b className="font-mono text-rose-700 text-xs font-black">
+                            -{ledgerItem.totalDeductions.toLocaleString('ar-SA')} {farmSettings.currency}
+                          </b>
+                        </div>
+                        <div className="bg-white/90 p-2.5 rounded-xl border border-amber-100">
+                          <span className="text-amber-700 block text-[10px]">(-) سحبيات نقدية لليوم</span>
+                          <b className="font-mono text-amber-700 text-xs font-black">
+                            -{ledgerItem.totalAdvances.toLocaleString('ar-SA')} {farmSettings.currency}
+                          </b>
+                        </div>
+                        <div className="bg-white/90 p-2.5 rounded-xl border border-emerald-200">
+                          <span className="text-emerald-900 block text-[10px] font-black">(=) الصافي المتبقي لليوم</span>
+                          <b className="font-mono text-sm text-emerald-800 font-black">
+                            {ledgerItem.netRemainingToDate.toLocaleString('ar-SA')} {farmSettings.currency}
+                          </b>
+                        </div>
+                      </div>
                     </div>
-                    <div>
-                      <span className="text-rose-700 block text-[10px]">(-) خصومات الغياب</span>
-                      <b className="font-mono text-rose-700">
-                        -{ledgerItem.totalDeductions.toLocaleString('ar-SA')}
-                      </b>
-                    </div>
-                    <div>
-                      <span className="text-amber-700 block text-[10px]">(-) إجمالي السحبيات</span>
-                      <b className="font-mono text-amber-700">
-                        -{ledgerItem.totalAdvances.toLocaleString('ar-SA')}
-                      </b>
-                    </div>
-                    <div>
-                      <span className="text-emerald-900 block text-[10px]">(=) الصافي المتبقي</span>
-                      <b className="font-mono text-sm text-emerald-800 font-black">
-                        {ledgerItem.netRemaining.toLocaleString('ar-SA')} {farmSettings.currency}
-                      </b>
+
+                    {/* End of month projection pill */}
+                    <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200 text-xs flex flex-wrap items-center justify-between gap-2 text-slate-600">
+                      <span>الراتب التعاقدي الكامل: <b className="font-mono text-slate-900">{ledgerItem.employee.monthlySalary.toLocaleString('ar-SA')} {farmSettings.currency}</b></span>
+                      <span>إجمالي سحبيات الشهر: <b className="font-mono text-amber-700">-{ledgerItem.fullMonthAdvances.toLocaleString('ar-SA')} {farmSettings.currency}</b></span>
+                      <span>المتبقي المتوقع لنهاية الشهر: <b className="font-mono text-slate-900 font-bold">{ledgerItem.fullMonthNetRemaining.toLocaleString('ar-SA')} {farmSettings.currency}</b></span>
                     </div>
                   </div>
 
@@ -1675,10 +1897,10 @@ export const EmployeesPayrollView: React.FC = () => {
                   <div className="space-y-2">
                     <h4 className="text-xs font-black text-slate-800 flex items-center gap-1.5">
                       <Clock className="w-3.5 h-3.5 text-indigo-600" />
-                      <span>تفاصيل أيام الغياب ونصف الدوام والخصومات ({ledgerItem.empAttendance.length} سجل)</span>
+                      <span>تفاصيل أيام الغياب ونصف الدوام والخصومات ({ledgerItem.empAttendanceMonth.length} سجل)</span>
                     </h4>
 
-                    {ledgerItem.empAttendance.length > 0 ? (
+                    {ledgerItem.empAttendanceMonth.length > 0 ? (
                       <div className="border border-slate-200 rounded-xl overflow-hidden text-xs">
                         <table className="w-full text-right">
                           <thead className="bg-slate-100 text-slate-600 font-bold">
@@ -1690,7 +1912,7 @@ export const EmployeesPayrollView: React.FC = () => {
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100">
-                            {ledgerItem.empAttendance.map((a) => (
+                            {ledgerItem.empAttendanceMonth.map((a) => (
                               <tr key={a.id} className="hover:bg-slate-50">
                                 <td className="p-2.5 font-mono">{a.date}</td>
                                 <td className="p-2.5">
@@ -1718,10 +1940,10 @@ export const EmployeesPayrollView: React.FC = () => {
                   <div className="space-y-2">
                     <h4 className="text-xs font-black text-slate-800 flex items-center gap-1.5">
                       <Wallet className="w-3.5 h-3.5 text-amber-600" />
-                      <span>تفاصيل السحبيات والسلف النقدية المصروفة ({ledgerItem.empAdvances.length} سحبية)</span>
+                      <span>تفاصيل السحبيات والسلف النقدية المصروفة ({ledgerItem.empAdvancesMonth.length} سحبية)</span>
                     </h4>
 
-                    {ledgerItem.empAdvances.length > 0 ? (
+                    {ledgerItem.empAdvancesMonth.length > 0 ? (
                       <div className="border border-slate-200 rounded-xl overflow-hidden text-xs">
                         <table className="w-full text-right">
                           <thead className="bg-slate-100 text-slate-600 font-bold">
@@ -1734,7 +1956,7 @@ export const EmployeesPayrollView: React.FC = () => {
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100">
-                            {ledgerItem.empAdvances.map((adv) => (
+                            {ledgerItem.empAdvancesMonth.map((adv) => (
                               <tr key={adv.id} className="hover:bg-slate-50">
                                 <td className="p-2.5 font-mono">{adv.date}</td>
                                 <td className="p-2.5 text-center font-mono font-black text-amber-700">
@@ -1779,6 +2001,390 @@ export const EmployeesPayrollView: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* MODAL 5: ALL CALCULATED OPERATIONS BREAKDOWN AS-OF-DATE (User Request) */}
+      {showAsOfBreakdownModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-3xl p-6 max-w-4xl w-full shadow-apple-modal border border-slate-100 text-right max-h-[92vh] overflow-y-auto space-y-5">
+            {/* Header */}
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shadow-xs">
+                  <FileSpreadsheet className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-slate-900">
+                    كشف كافة العمليات والاحتساب حتى تاريخ اليوم
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    جميع حركات الدوام، الغياب، الخصومات والسحبيات المحتسبة حتى تاريخ: <b className="font-mono text-slate-800">{asOfDate}</b>
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                {/* Inline Date Switcher */}
+                <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1">
+                  <Calendar className="w-3.5 h-3.5 text-indigo-600" />
+                  <input
+                    type="date"
+                    value={asOfDate}
+                    onChange={(e) => handleAsOfDateChange(e.target.value)}
+                    className="text-xs font-mono font-bold text-slate-800 bg-transparent outline-none cursor-pointer"
+                  />
+                </div>
+
+                <button
+                  onClick={handleSetToday}
+                  className="px-2.5 py-1 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold transition-all border border-indigo-200"
+                  title="تحديد تاريخ اليوم الحالي"
+                >
+                  اليوم
+                </button>
+
+                <button
+                  onClick={() => window.print()}
+                  className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs flex items-center gap-1 transition-colors"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>طباعة</span>
+                </button>
+
+                <button
+                  onClick={() => setShowAsOfBreakdownModal(false)}
+                  className="text-slate-400 hover:text-slate-600 p-1 rounded-xl"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* As-Of Date KPI Summary Bar */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="p-3.5 rounded-2xl bg-indigo-50 border border-indigo-100 text-right">
+                <span className="text-[11px] font-bold text-indigo-700 block">الرواتب المستحقة حتى اليوم</span>
+                <b className="text-base font-mono font-black text-indigo-950">
+                  {totalEarnedToDate.toLocaleString('ar-SA')} {farmSettings.currency}
+                </b>
+                <span className="text-[10px] text-indigo-600 block mt-0.5">عن أيام العمل المنجزة</span>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-100 text-right">
+                <span className="text-[11px] font-bold text-rose-700 block">إجمالي الخصومات حتى اليوم</span>
+                <b className="text-base font-mono font-black text-rose-950">
+                  -{totalDeductionsToDate.toLocaleString('ar-SA')} {farmSettings.currency}
+                </b>
+                <span className="text-[10px] text-rose-600 block mt-0.5">
+                  {payrollLedger.reduce((sum, p) => sum + p.fullAbsencesCount, 0)} غياب | {payrollLedger.reduce((sum, p) => sum + p.halfDaysCount, 0)} نصف دوام
+                </span>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-100 text-right">
+                <span className="text-[11px] font-bold text-amber-700 block">إجمالي السحبيات حتى اليوم</span>
+                <b className="text-base font-mono font-black text-amber-950">
+                  -{totalAdvancesToDate.toLocaleString('ar-SA')} {farmSettings.currency}
+                </b>
+                <span className="text-[10px] text-amber-600 block mt-0.5">
+                  {allAdvancesToDate.length} سحبية نقدية
+                </span>
+              </div>
+
+              <div className={`p-3.5 rounded-2xl border text-right ${
+                totalNetRemainingToDate >= 0 ? 'bg-emerald-50 border-emerald-100 text-emerald-950' : 'bg-rose-50 border-rose-100 text-rose-950'
+              }`}>
+                <span className="text-[11px] font-bold block">صافي المتبقي للصرف حتى اليوم</span>
+                <b className="text-base font-mono font-black">
+                  {totalNetRemainingToDate.toLocaleString('ar-SA')} {farmSettings.currency}
+                </b>
+                <span className="text-[10px] opacity-80 block mt-0.5">المستحق للصرف الفعلي</span>
+              </div>
+            </div>
+
+            {/* Filter and Tab Selectors */}
+            <div className="flex flex-wrap items-center justify-between gap-3 p-2.5 bg-slate-50 rounded-2xl border border-slate-200">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  onClick={() => setBreakdownTab('all')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                    breakdownTab === 'all' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  جميع العمليات والملخص
+                </button>
+                <button
+                  onClick={() => setBreakdownTab('summary')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                    breakdownTab === 'summary' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  ملخص استحقاق الموظفين ({employees.length})
+                </button>
+                <button
+                  onClick={() => setBreakdownTab('attendance')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                    breakdownTab === 'attendance' ? 'bg-slate-900 text-white shadow-xs' : 'text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  حركات الدوام والغياب ({allAttendanceToDate.length})
+                </button>
+                <button
+                  onClick={() => setBreakdownTab('advances')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                    breakdownTab === 'advances' ? 'bg-amber-600 text-white shadow-xs' : 'text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  حركات السحبيات النقدية ({allAdvancesToDate.length})
+                </button>
+              </div>
+
+              {/* Employee Filter */}
+              <div className="flex items-center gap-1.5">
+                <Filter className="w-3.5 h-3.5 text-slate-500" />
+                <span className="text-xs font-bold text-slate-600">الموظف:</span>
+                <select
+                  value={breakdownEmployeeFilter}
+                  onChange={(e) => setBreakdownEmployeeFilter(e.target.value)}
+                  className="glass-input text-xs font-bold py-1 px-2.5 rounded-xl"
+                >
+                  <option value="all">كافة الموظفين</option>
+                  {employees.map((emp) => (
+                    <option key={emp.id} value={emp.id}>
+                      {emp.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* TAB CONTENT 1: Summary Table */}
+            {(breakdownTab === 'all' || breakdownTab === 'summary') && (
+              <div className="space-y-2">
+                <h4 className="text-xs font-black text-slate-800 flex items-center gap-1.5">
+                  <Calculator className="w-4 h-4 text-indigo-600" />
+                  <span>ملخص استحقاق وصافي المتبقي لكل موظف حتى تاريخ اليوم ({asOfDate})</span>
+                </h4>
+                <div className="border border-slate-200 rounded-2xl overflow-hidden text-xs">
+                  <table className="w-full text-right">
+                    <thead className="bg-slate-100 text-slate-700 font-bold">
+                      <tr>
+                        <th className="p-3">الموظف</th>
+                        <th className="p-3 text-center">أيام العمل المنجزة</th>
+                        <th className="p-3 text-center">الراتب المستحق لليوم</th>
+                        <th className="p-3 text-center text-rose-700">خصومات الغياب لليوم</th>
+                        <th className="p-3 text-center text-amber-700">السحبيات لليوم</th>
+                        <th className="p-3 text-center text-emerald-800">المتبقي حتى اليوم (=)</th>
+                        <th className="p-3 text-center">كشف</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {payrollLedger
+                        .filter((p) => breakdownEmployeeFilter === 'all' || p.employee.id === breakdownEmployeeFilter)
+                        .map((item) => (
+                          <tr key={item.employee.id} className="hover:bg-slate-50">
+                            <td className="p-3">
+                              <b className="text-slate-900 block">{item.employee.name}</b>
+                              <span className="text-[11px] text-slate-500">{item.employee.role}</span>
+                            </td>
+                            <td className="p-3 text-center font-bold">
+                              <span className="px-2 py-0.5 rounded-lg bg-indigo-50 text-indigo-800 font-mono">
+                                {item.effectiveDaysWorked} / {item.eligibleDays} يوم
+                              </span>
+                            </td>
+                            <td className="p-3 text-center font-mono font-bold text-indigo-950">
+                              {item.earnedSalaryToDate.toLocaleString('ar-SA')} {farmSettings.currency}
+                            </td>
+                            <td className="p-3 text-center font-mono font-bold text-rose-700">
+                              {item.totalDeductions > 0 ? `-${item.totalDeductions.toLocaleString('ar-SA')}` : '0'}
+                            </td>
+                            <td className="p-3 text-center font-mono font-bold text-amber-700">
+                              {item.totalAdvances > 0 ? `-${item.totalAdvances.toLocaleString('ar-SA')}` : '0'}
+                            </td>
+                            <td className="p-3 text-center font-mono font-black">
+                              <span
+                                className={`px-2.5 py-1 rounded-xl text-xs inline-block ${
+                                  item.netRemainingToDate > 0
+                                    ? 'bg-emerald-100 text-emerald-900 border border-emerald-300'
+                                    : item.netRemainingToDate === 0
+                                    ? 'bg-slate-100 text-slate-700'
+                                    : 'bg-rose-100 text-rose-900 border border-rose-300'
+                                }`}
+                              >
+                                {item.netRemainingToDate.toLocaleString('ar-SA')} {farmSettings.currency}
+                              </span>
+                            </td>
+                            <td className="p-3 text-center">
+                              <button
+                                onClick={() => {
+                                  setShowAsOfBreakdownModal(false);
+                                  setSelectedEmployeeForStatement(item.employee);
+                                }}
+                                className="px-2 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-[10px]"
+                              >
+                                كشف مفصل
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* TAB CONTENT 2: Attendance Operations Log */}
+            {(breakdownTab === 'all' || breakdownTab === 'attendance') && (
+              <div className="space-y-2">
+                <h4 className="text-xs font-black text-slate-800 flex items-center gap-1.5">
+                  <Clock className="w-4 h-4 text-emerald-600" />
+                  <span>عمليات وحركات الحضور والغياب المسجلة حتى تاريخ اليوم ({allAttendanceToDate.length} عملية)</span>
+                </h4>
+                {allAttendanceToDate.length > 0 ? (
+                  <div className="border border-slate-200 rounded-2xl overflow-hidden text-xs max-h-72 overflow-y-auto">
+                    <table className="w-full text-right">
+                      <thead className="bg-slate-100 text-slate-700 font-bold sticky top-0">
+                        <tr>
+                          <th className="p-2.5">التاريخ</th>
+                          <th className="p-2.5">اسم الموظف</th>
+                          <th className="p-2.5 text-center">حالة الدوام</th>
+                          <th className="p-2.5 text-center">الخصم المطبق</th>
+                          <th className="p-2.5">البيان والسبب</th>
+                          <th className="p-2.5">المسجل</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {allAttendanceToDate
+                          .filter((a) => breakdownEmployeeFilter === 'all' || a.employeeId === breakdownEmployeeFilter)
+                          .map((a) => (
+                            <tr key={a.id} className="hover:bg-slate-50">
+                              <td className="p-2.5 font-mono text-slate-800">{a.date}</td>
+                              <td className="p-2.5 font-bold text-slate-900">{a.employeeName}</td>
+                              <td className="p-2.5 text-center">
+                                {a.status === 'present_full' && (
+                                  <span className="px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 font-black text-[10px]">
+                                    حضور كامل
+                                  </span>
+                                )}
+                                {a.status === 'half_day' && (
+                                  <span className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 font-black text-[10px]">
+                                    نصف دوام
+                                  </span>
+                                )}
+                                {a.status === 'absent_full' && (
+                                  <span className="px-2 py-0.5 rounded-md bg-rose-100 text-rose-800 font-black text-[10px]">
+                                    غياب كامل
+                                  </span>
+                                )}
+                              </td>
+                              <td className="p-2.5 text-center font-mono font-bold text-rose-700">
+                                {a.deductionAmount > 0
+                                  ? `-${a.deductionAmount.toLocaleString('ar-SA')} ${farmSettings.currency}`
+                                  : '0'}
+                              </td>
+                              <td className="p-2.5 text-slate-500">{a.notes || '-'}</td>
+                              <td className="p-2.5 text-[11px] text-slate-400">{a.recordedBy || '-'}</td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="p-4 rounded-2xl bg-slate-50 text-slate-400 text-xs text-center border border-slate-200">
+                    لا توجد حركات حضور أو غياب مسجلة حتى تاريخ {asOfDate}.
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* TAB CONTENT 3: Advances Operations Log */}
+            {(breakdownTab === 'all' || breakdownTab === 'advances') && (
+              <div className="space-y-2">
+                <h4 className="text-xs font-black text-slate-800 flex items-center gap-1.5">
+                  <Wallet className="w-4 h-4 text-amber-600" />
+                  <span>عمليات السحبيات والسلف النقدية المصروفة حتى تاريخ اليوم ({allAdvancesToDate.length} سحبية)</span>
+                </h4>
+                {allAdvancesToDate.length > 0 ? (
+                  <div className="border border-slate-200 rounded-2xl overflow-hidden text-xs max-h-72 overflow-y-auto">
+                    <table className="w-full text-right">
+                      <thead className="bg-slate-100 text-slate-700 font-bold sticky top-0">
+                        <tr>
+                          <th className="p-2.5">تاريخ السحب</th>
+                          <th className="p-2.5">الموظف</th>
+                          <th className="p-2.5 text-center">المبلغ</th>
+                          <th className="p-2.5">طريقة الصرف</th>
+                          <th className="p-2.5">البيان وسبب السحب</th>
+                          <th className="p-2.5">رقم السند</th>
+                          <th className="p-2.5">المسجل</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {allAdvancesToDate
+                          .filter((adv) => breakdownEmployeeFilter === 'all' || adv.employeeId === breakdownEmployeeFilter)
+                          .map((adv) => (
+                            <tr key={adv.id} className="hover:bg-slate-50">
+                              <td className="p-2.5 font-mono text-slate-800">{adv.date}</td>
+                              <td className="p-2.5 font-bold text-slate-900">{adv.employeeName}</td>
+                              <td className="p-2.5 text-center font-mono font-black text-amber-700">
+                                {adv.amount.toLocaleString('ar-SA')} {farmSettings.currency}
+                              </td>
+                              <td className="p-2.5 text-slate-600">
+                                {adv.paidFrom === 'cash_box' ? 'الصندوق' : 'بنك'}
+                              </td>
+                              <td className="p-2.5 text-slate-700">{adv.reason || '-'}</td>
+                              <td className="p-2.5 font-mono text-slate-500">{adv.receiptRef || '-'}</td>
+                              <td className="p-2.5 text-[11px] text-slate-400">{adv.recordedBy || '-'}</td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="p-4 rounded-2xl bg-slate-50 text-slate-400 text-xs text-center border border-slate-200">
+                    لا توجد سحبيات نقدية مسجلة حتى تاريخ {asOfDate}.
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Modal Footer */}
+            <div className="pt-4 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowAsOfBreakdownModal(false);
+                    handleOpenAttendanceModal();
+                  }}
+                  className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs flex items-center gap-1.5 transition-all"
+                >
+                  <Clock className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>+ تسجيل دوام / غياب</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowAsOfBreakdownModal(false);
+                    handleOpenAdvanceModal();
+                  }}
+                  className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-700 hover:to-amber-700 text-white font-bold text-xs flex items-center gap-1.5 transition-all"
+                >
+                  <DollarSign className="w-3.5 h-3.5" />
+                  <span>+ سحبية نقدية</span>
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowAsOfBreakdownModal(false)}
+                className="px-5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition-all"
+              >
+                إغلاق
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
+

@@ -383,6 +383,7 @@ export interface FeedStock {
   lastRestockedDate: string;
   openingStockKg?: number; // الرصيد الافتتاحي بالكيلوغرام للمطابقة الدقيقة
   openingStockBags?: number; // الرصيد الافتتاحي بالأكياس
+  isActive?: boolean; // حالة تفعيل الصنف في الدورة الحالية (true نشط، false متوقف مؤقتاً)
 }
 
 export interface FeedConsumptionRecord {
