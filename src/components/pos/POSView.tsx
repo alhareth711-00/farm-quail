@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { db } from '../../db';
 import { useLiveQuery } from 'dexie-react-hooks';
-import type { Product, Customer, OrderInvoice, OrderItem, PaymentMethod, FeedStock } from '../../types';
+import type { Product, Customer, OrderInvoice, OrderItem, PaymentMethod, FeedStock, BatchAllocation, EggBatchRecord } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import {
@@ -34,6 +34,11 @@ import {
   Package,
   FileSignature,
   PenLine,
+  PackageCheck,
+  SlidersHorizontal,
+  ArrowLeftRight,
+  Split,
+  History,
 } from 'lucide-react';
 import { initializeDatabase } from '../../db/seedData';
 import { recordSaleJournalEntry } from '../../services/accountingService';
@@ -61,9 +66,154 @@ export const POSView: React.FC = () => {
   const sortedAvailableEggBatches = React.useMemo(() => {
     if (!eggBatches) return [];
     return [...eggBatches]
-      .filter((b) => b.cagesCount > 0)
+      .filter((b) => b.cagesCount > 0 && b.status === 'available')
       .sort((a, b) => a.productionDate.localeCompare(b.productionDate));
   }, [eggBatches]);
+
+  // Grouped egg inventory by production date (combines loose and standard batches per day)
+  const groupedEggBatchesByDate = React.useMemo(() => {
+    if (!eggBatches) return [];
+    const map = new Map<string, { productionDate: string; totalCages: number; batches: EggBatchRecord[] }>();
+    for (const b of eggBatches) {
+      if (b.cagesCount <= 0 || b.status !== 'available') continue;
+      const ex = map.get(b.productionDate) || { productionDate: b.productionDate, totalCages: 0, batches: [] };
+      ex.totalCages += b.cagesCount;
+      ex.batches.push(b);
+      map.set(b.productionDate, ex);
+    }
+    return Array.from(map.values()).sort((a, b) => a.productionDate.localeCompare(b.productionDate));
+  }, [eggBatches]);
+
+  // Helper to calculate exact allocations across dates for a requested quantity
+  const computeItemEggAllocations = (
+    quantity: number,
+    selectionMode: string = 'fifo', // 'fifo' or 'custom' or specific date e.g. '2026-10-03'
+    strategy: 'next_newer' | 'oldest_fifo' | 'custom' = 'next_newer',
+    customMap?: Record<string, number>,
+    availableBatches: EggBatchRecord[] = []
+  ): {
+    allocations: BatchAllocation[];
+    primaryAvailable: number;
+    deficit: number;
+    summaryText: string;
+  } => {
+    const dateMap = new Map<string, { total: number; batches: EggBatchRecord[] }>();
+    for (const b of availableBatches) {
+      if (b.cagesCount <= 0 || b.status !== 'available') continue;
+      const ex = dateMap.get(b.productionDate) || { total: 0, batches: [] };
+      ex.total += b.cagesCount;
+      ex.batches.push(b);
+      dateMap.set(b.productionDate, ex);
+    }
+    const sortedDates = Array.from(dateMap.keys()).sort(); // ascending (oldest first)
+
+    if (quantity <= 0 || sortedDates.length === 0) {
+      return { allocations: [], primaryAvailable: 0, deficit: 0, summaryText: '' };
+    }
+
+    // 1. Custom allocation mode
+    if (selectionMode === 'custom' && customMap) {
+      const allocs: BatchAllocation[] = [];
+      let totalAllocated = 0;
+      for (const [pDate, qty] of Object.entries(customMap)) {
+        if (qty > 0) {
+          allocs.push({
+            productionDate: pDate,
+            quantity: qty,
+          });
+          totalAllocated += qty;
+        }
+      }
+      return {
+        allocations: allocs,
+        primaryAvailable: totalAllocated,
+        deficit: Math.max(0, quantity - totalAllocated),
+        summaryText: allocs.map((a) => `${a.quantity} طبق (${a.productionDate})`).join(' + '),
+      };
+    }
+
+    // 2. FIFO mode (Oldest first)
+    if (selectionMode === 'fifo') {
+      const allocs: BatchAllocation[] = [];
+      let rem = quantity;
+      for (const d of sortedDates) {
+        if (rem <= 0) break;
+        const avail = dateMap.get(d)!.total;
+        const take = Math.min(avail, rem);
+        if (take > 0) {
+          allocs.push({ productionDate: d, quantity: take });
+          rem -= take;
+        }
+      }
+      return {
+        allocations: allocs,
+        primaryAvailable: quantity - rem,
+        deficit: rem,
+        summaryText: allocs.map((a) => `${a.quantity} طبق (${a.productionDate})`).join(' + '),
+      };
+    }
+
+    // 3. Specific production date mode (e.g. '2026-10-03')
+    const primaryDate = selectionMode;
+    const primaryGroup = dateMap.get(primaryDate);
+    const primaryAvail = primaryGroup ? primaryGroup.total : 0;
+    const takeFromPrimary = Math.min(primaryAvail, quantity);
+    const deficit = quantity - takeFromPrimary;
+
+    const allocs: BatchAllocation[] = [];
+    if (takeFromPrimary > 0) {
+      allocs.push({ productionDate: primaryDate, quantity: takeFromPrimary });
+    }
+
+    if (deficit > 0) {
+      let remDeficit = deficit;
+      if (strategy === 'next_newer') {
+        // Look at dates strictly AFTER primaryDate first (next newer dates)
+        const newerDates = sortedDates.filter((d) => d > primaryDate);
+        for (const d of newerDates) {
+          if (remDeficit <= 0) break;
+          const avail = dateMap.get(d)!.total;
+          const take = Math.min(avail, remDeficit);
+          if (take > 0) {
+            allocs.push({ productionDate: d, quantity: take });
+            remDeficit -= take;
+          }
+        }
+        // If still not enough, look at older dates (reversed)
+        if (remDeficit > 0) {
+          const olderDates = sortedDates.filter((d) => d < primaryDate).reverse();
+          for (const d of olderDates) {
+            if (remDeficit <= 0) break;
+            const avail = dateMap.get(d)!.total;
+            const take = Math.min(avail, remDeficit);
+            if (take > 0) {
+              allocs.push({ productionDate: d, quantity: take });
+              remDeficit -= take;
+            }
+          }
+        }
+      } else {
+        // 'oldest_fifo': Look at oldest available dates other than primaryDate
+        const otherDates = sortedDates.filter((d) => d !== primaryDate);
+        for (const d of otherDates) {
+          if (remDeficit <= 0) break;
+          const avail = dateMap.get(d)!.total;
+          const take = Math.min(avail, remDeficit);
+          if (take > 0) {
+            allocs.push({ productionDate: d, quantity: take });
+            remDeficit -= take;
+          }
+        }
+      }
+    }
+
+    return {
+      allocations: allocs,
+      primaryAvailable: primaryAvail,
+      deficit,
+      summaryText: allocs.map((a) => `${a.quantity} طبق (${a.productionDate})`).join(' + '),
+    };
+  };
 
   // Cart state
   const [cart, setCart] = useState<OrderItem[]>([]);
@@ -86,6 +236,10 @@ export const POSView: React.FC = () => {
   const [showWalletReportModal, setShowWalletReportModal] = useState<boolean>(false);
   const [showTrayPriceModal, setShowTrayPriceModal] = useState<boolean>(false);
   const [trayPriceForm, setTrayPriceForm] = useState<Record<string, { retail: number; wholesale: number }>>({});
+
+  // Multi-Batch Custom Allocation Modal State
+  const [allocatingItem, setAllocatingItem] = useState<OrderItem | null>(null);
+  const [customAllocationDraft, setCustomAllocationDraft] = useState<Record<string, number>>({});
 
   // Add Product Modal State
   const [showAddProductModal, setShowAddProductModal] = useState<boolean>(false);
@@ -326,17 +480,35 @@ export const POSView: React.FC = () => {
 
     const unitPrice = priceType === 'wholesale' ? product.wholesalePrice : product.retailPrice;
     const isEgg = product.trayCapacity === 18 || product.category === 'table_eggs';
-    const oldest = sortedAvailableEggBatches[0];
 
     setCart((prev) => {
       const existing = prev.find((item) => item.productId === product.id);
       if (existing) {
+        const newQty = existing.quantity + 1;
+        const alloc = isEgg
+          ? computeItemEggAllocations(
+              newQty,
+              existing.batchId || 'fifo',
+              existing.fulfillmentStrategy || 'next_newer',
+              undefined,
+              eggBatches || []
+            )
+          : undefined;
         return prev.map((item) =>
           item.productId === product.id
-            ? { ...item, quantity: item.quantity + 1, total: (item.quantity + 1) * item.unitPrice }
+            ? {
+                ...item,
+                quantity: newQty,
+                total: newQty * item.unitPrice,
+                batchAllocations: alloc?.allocations,
+                productionDate: alloc?.allocations[0]?.productionDate,
+              }
             : item
         );
       } else {
+        const alloc = isEgg
+          ? computeItemEggAllocations(1, 'fifo', 'next_newer', undefined, eggBatches || [])
+          : undefined;
         return [
           ...prev,
           {
@@ -347,37 +519,139 @@ export const POSView: React.FC = () => {
             unitPrice,
             costPrice: product.costPrice || 0,
             total: unitPrice,
-            batchId: isEgg && oldest ? 'fifo' : undefined,
-            productionDate: isEgg && oldest ? oldest.productionDate : undefined,
+            batchId: isEgg ? 'fifo' : undefined,
+            productionDate: alloc?.allocations[0]?.productionDate,
+            batchAllocations: alloc?.allocations,
+            fulfillmentStrategy: 'next_newer',
           },
         ];
       }
     });
   };
 
-  const updateItemBatch = (productId: string, batchIdOrFifo: string) => {
+  const updateItemEggBatch = (productId: string, selectedDateOrMode: string) => {
     setCart((prev) =>
       prev.map((item) => {
         if (item.productId === productId) {
-          if (batchIdOrFifo === 'fifo') {
-            const oldest = sortedAvailableEggBatches[0];
-            return {
-              ...item,
-              batchId: 'fifo',
-              productionDate: oldest ? oldest.productionDate : undefined,
-            };
-          } else {
-            const selected = sortedAvailableEggBatches.find((b) => b.id === batchIdOrFifo);
-            return {
-              ...item,
-              batchId: selected ? selected.id : undefined,
-              productionDate: selected ? selected.productionDate : undefined,
-            };
+          if (selectedDateOrMode === 'custom') {
+            openCustomAllocationModal(item);
+            return item;
           }
+          const alloc = computeItemEggAllocations(
+            item.quantity,
+            selectedDateOrMode,
+            item.fulfillmentStrategy || 'next_newer',
+            undefined,
+            eggBatches || []
+          );
+          return {
+            ...item,
+            batchId: selectedDateOrMode,
+            productionDate: selectedDateOrMode === 'fifo' ? alloc.allocations[0]?.productionDate : selectedDateOrMode,
+            batchAllocations: alloc.allocations,
+          };
         }
         return item;
       })
     );
+  };
+
+  const updateItemStrategy = (productId: string, strategy: 'next_newer' | 'oldest_fifo') => {
+    setCart((prev) =>
+      prev.map((item) => {
+        if (item.productId === productId) {
+          const alloc = computeItemEggAllocations(
+            item.quantity,
+            item.batchId || 'fifo',
+            strategy,
+            undefined,
+            eggBatches || []
+          );
+          return {
+            ...item,
+            fulfillmentStrategy: strategy,
+            batchAllocations: alloc.allocations,
+          };
+        }
+        return item;
+      })
+    );
+  };
+
+  const setItemExactQuantity = (productId: string, newQty: number) => {
+    const qty = Math.max(1, newQty);
+    setCart((prev) =>
+      prev.map((item) => {
+        if (item.productId === productId) {
+          const orig = products?.find((p) => p.id === productId);
+          const isEgg = orig?.trayCapacity === 18 || orig?.category === 'table_eggs';
+          const alloc = isEgg
+            ? computeItemEggAllocations(
+                qty,
+                item.batchId || 'fifo',
+                item.fulfillmentStrategy || 'next_newer',
+                undefined,
+                eggBatches || []
+              )
+            : undefined;
+          return {
+            ...item,
+            quantity: qty,
+            total: qty * item.unitPrice,
+            batchAllocations: alloc?.allocations,
+            productionDate: alloc?.allocations[0]?.productionDate,
+          };
+        }
+        return item;
+      })
+    );
+  };
+
+  const openCustomAllocationModal = (item: OrderItem) => {
+    const draft: Record<string, number> = {};
+    if (item.batchAllocations && item.batchAllocations.length > 0) {
+      for (const a of item.batchAllocations) {
+        draft[a.productionDate] = a.quantity;
+      }
+    } else if (item.productionDate) {
+      draft[item.productionDate] = item.quantity;
+    }
+    setCustomAllocationDraft(draft);
+    setAllocatingItem(item);
+  };
+
+  const handleSaveCustomAllocation = () => {
+    if (!allocatingItem) return;
+    const totalAlloc = Object.values(customAllocationDraft).reduce((sum, q) => sum + (Number(q) || 0), 0);
+    if (totalAlloc !== allocatingItem.quantity) {
+      toast(`⚠️ إجمالي الكمية الموزعة (${totalAlloc} طبق) لا يطابق كمية الطلب المطلوب (${allocatingItem.quantity} طبق)!`, 'warning');
+      return;
+    }
+
+    const alloc = computeItemEggAllocations(
+      allocatingItem.quantity,
+      'custom',
+      'custom',
+      customAllocationDraft,
+      eggBatches || []
+    );
+
+    setCart((prev) =>
+      prev.map((it) =>
+        it.productId === allocatingItem.productId
+          ? {
+              ...it,
+              batchId: 'custom',
+              fulfillmentStrategy: 'custom',
+              batchAllocations: alloc.allocations,
+              productionDate: alloc.allocations[0]?.productionDate,
+            }
+          : it
+      )
+    );
+
+    toast(`✅ تم تخصيص وتثبيت توزيع الدفعات للطلب بنجاح (${alloc.summaryText})`, 'success');
+    setAllocatingItem(null);
   };
 
   const updateQuantity = (productId: string, delta: number) => {
@@ -412,10 +686,23 @@ export const POSView: React.FC = () => {
         .map((item) => {
           if (item.productId === productId) {
             const newQty = Math.max(0, item.quantity + delta);
+            const orig = products?.find((p) => p.id === productId);
+            const isEgg = orig?.trayCapacity === 18 || orig?.category === 'table_eggs';
+            const alloc = isEgg && newQty > 0
+              ? computeItemEggAllocations(
+                  newQty,
+                  item.batchId || 'fifo',
+                  item.fulfillmentStrategy || 'next_newer',
+                  undefined,
+                  eggBatches || []
+                )
+              : undefined;
             return {
               ...item,
               quantity: newQty,
               total: newQty * item.unitPrice,
+              batchAllocations: alloc?.allocations,
+              productionDate: alloc?.allocations[0]?.productionDate,
             };
           }
           return item;
@@ -683,39 +970,78 @@ export const POSView: React.FC = () => {
         const isEggTray = prod.trayCapacity === 18 || prod.category === 'table_eggs';
 
         if (isEggTray) {
-          let neededQty = item.quantity;
+          // Exact fulfillment according to batchAllocations
+          if (item.batchAllocations && item.batchAllocations.length > 0) {
+            for (const alloc of item.batchAllocations) {
+              let allocNeeded = alloc.quantity;
+              // 1. Deduct from batches matching this exact production date
+              const matchingBatches = (await db.eggBatches.where('status').equals('available').toArray())
+                .filter((b) => b.cagesCount > 0 && b.productionDate === alloc.productionDate)
+                .sort((a, b) => (a.batchCode || '').localeCompare(b.batchCode || ''));
 
-          // 1. If a specific batch was selected (not 'fifo')
-          if (item.batchId && item.batchId !== 'fifo') {
-            const specificBatch = await db.eggBatches.get(item.batchId);
-            if (specificBatch && specificBatch.cagesCount > 0) {
-              const deduct = Math.min(specificBatch.cagesCount, neededQty);
-              const remaining = specificBatch.cagesCount - deduct;
-              await db.eggBatches.update(specificBatch.id, {
-                cagesCount: remaining,
-                status: remaining === 0 ? 'depleted' : 'available',
-                updatedAt: new Date().toISOString(),
-              });
-              neededQty -= deduct;
+              for (const b of matchingBatches) {
+                if (allocNeeded <= 0) break;
+                const deduct = Math.min(b.cagesCount, allocNeeded);
+                const remaining = b.cagesCount - deduct;
+                await db.eggBatches.update(b.id, {
+                  cagesCount: remaining,
+                  status: remaining === 0 ? 'depleted' : 'available',
+                  updatedAt: new Date().toISOString(),
+                });
+                allocNeeded -= deduct;
+              }
+
+              // 2. Safety fallback if live stock changed during checkout
+              if (allocNeeded > 0) {
+                const anyBatches = (await db.eggBatches.where('status').equals('available').toArray())
+                  .filter((b) => b.cagesCount > 0)
+                  .sort((a, b) => a.productionDate.localeCompare(b.productionDate));
+                for (const b of anyBatches) {
+                  if (allocNeeded <= 0) break;
+                  const deduct = Math.min(b.cagesCount, allocNeeded);
+                  const remaining = b.cagesCount - deduct;
+                  await db.eggBatches.update(b.id, {
+                    cagesCount: remaining,
+                    status: remaining === 0 ? 'depleted' : 'available',
+                    updatedAt: new Date().toISOString(),
+                  });
+                  allocNeeded -= deduct;
+                }
+              }
             }
-          }
+          } else {
+            // Legacy / fallback if no batchAllocations
+            let neededQty = item.quantity;
+            if (item.batchId && item.batchId !== 'fifo') {
+              const specificBatch = await db.eggBatches.get(item.batchId);
+              if (specificBatch && specificBatch.cagesCount > 0) {
+                const deduct = Math.min(specificBatch.cagesCount, neededQty);
+                const remaining = specificBatch.cagesCount - deduct;
+                await db.eggBatches.update(specificBatch.id, {
+                  cagesCount: remaining,
+                  status: remaining === 0 ? 'depleted' : 'available',
+                  updatedAt: new Date().toISOString(),
+                });
+                neededQty -= deduct;
+              }
+            }
 
-          // 2. If 'fifo' or if additional neededQty remains
-          if (neededQty > 0) {
-            const availableBatches = (await db.eggBatches.where('status').equals('available').toArray())
-              .filter((b) => b.cagesCount > 0)
-              .sort((a, b) => a.productionDate.localeCompare(b.productionDate));
+            if (neededQty > 0) {
+              const availableBatches = (await db.eggBatches.where('status').equals('available').toArray())
+                .filter((b) => b.cagesCount > 0)
+                .sort((a, b) => a.productionDate.localeCompare(b.productionDate));
 
-            for (const b of availableBatches) {
-              if (neededQty <= 0) break;
-              const deduct = Math.min(b.cagesCount, neededQty);
-              const remaining = b.cagesCount - deduct;
-              await db.eggBatches.update(b.id, {
-                cagesCount: remaining,
-                status: remaining === 0 ? 'depleted' : 'available',
-                updatedAt: new Date().toISOString(),
-              });
-              neededQty -= deduct;
+              for (const b of availableBatches) {
+                if (neededQty <= 0) break;
+                const deduct = Math.min(b.cagesCount, neededQty);
+                const remaining = b.cagesCount - deduct;
+                await db.eggBatches.update(b.id, {
+                  cagesCount: remaining,
+                  status: remaining === 0 ? 'depleted' : 'available',
+                  updatedAt: new Date().toISOString(),
+                });
+                neededQty -= deduct;
+              }
             }
           }
 
@@ -846,8 +1172,8 @@ export const POSView: React.FC = () => {
         {/* Products Section (8 cols) */}
         <div className="lg:col-span-7 xl:col-span-8 space-y-4">
           {/* Category Tabs & Search Bar */}
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-            <div className="relative flex-1">
+          <div className="flex flex-col md:flex-row items-stretch md:items-center gap-3">
+            <div className="relative flex-1 min-w-[180px]">
               <Search className="w-4 h-4 text-slate-400 absolute right-3.5 top-3" />
               <input
                 type="text"
@@ -859,12 +1185,12 @@ export const POSView: React.FC = () => {
             </div>
 
             {/* Category Tabs */}
-            <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 max-w-full scrollbar-none shrink-0">
               {categories.map((cat) => (
                 <button
                   key={cat.id}
                   onClick={() => setSelectedCategory(cat.id)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all shrink-0 ${
                     selectedCategory === cat.id
                       ? 'bg-slate-900 text-white shadow-sm'
                       : 'bg-white hover:bg-slate-100 text-slate-600 border border-slate-200'
@@ -1107,6 +1433,19 @@ export const POSView: React.FC = () => {
                   </option>
                 ))}
               </select>
+
+              {/* Active Customer Prior Debt Alert Banner */}
+              {activeCustomer && activeCustomer.currentDebt > 0 && (
+                <div className="mt-1.5 px-2.5 py-1.5 rounded-xl bg-amber-50 border border-amber-200/80 text-[10.5px] flex items-center justify-between text-amber-900 animate-fadeIn">
+                  <span className="font-bold flex items-center gap-1.5">
+                    <History className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                    <span>رصيد مديونية سابقة على العميل:</span>
+                  </span>
+                  <span className="font-mono font-black text-rose-700">
+                    {activeCustomer.currentDebt.toLocaleString('ar-SA')} {farmSettings.currency}
+                  </span>
+                </div>
+              )}
             </div>
 
             {/* Cart Items List */}
@@ -1182,34 +1521,145 @@ export const POSView: React.FC = () => {
                         </button>
                       </div>
 
-                      {/* Production Date Batch Selection Field (Requirement 8) */}
-                      {isEgg && sortedAvailableEggBatches.length > 0 && (
-                        <div className="pt-2 border-t border-slate-200/60 flex flex-col gap-1">
-                          <div className="flex items-center justify-between text-[10px]">
-                            <span className="font-bold text-slate-600 flex items-center gap-1">
-                              <Calendar className="w-3 h-3 text-emerald-600" />
-                              <span>تاريخ إنتاج البيض المباع من المخزن:</span>
-                            </span>
-                            <span className="font-mono text-emerald-800 font-extrabold">
-                              {item.productionDate ? `إنتاج: ${item.productionDate}` : 'الأقدم تلقائياً'}
-                            </span>
+                      {/* Egg Tray Production Date & Smart Fulfillment Breakdown */}
+                      {isEgg && groupedEggBatchesByDate.length > 0 && (() => {
+                        const allocInfo = computeItemEggAllocations(
+                          item.quantity,
+                          item.batchId || 'fifo',
+                          item.fulfillmentStrategy || 'next_newer',
+                          item.batchId === 'custom'
+                            ? (item.batchAllocations?.reduce((acc, a) => ({ ...acc, [a.productionDate]: a.quantity }), {}) || {})
+                            : undefined,
+                          eggBatches || []
+                        );
+                        const isSpecificDateSelected = item.batchId && item.batchId !== 'fifo' && item.batchId !== 'custom';
+                        const hasDeficit = allocInfo.deficit > 0 && isSpecificDateSelected;
+                        const totalEggsCount = item.quantity * (orig?.trayCapacity || 18);
+
+                        return (
+                          <div className="pt-2 border-t border-slate-200/80 flex flex-col gap-2 bg-emerald-50/40 p-2.5 rounded-2xl border border-emerald-100/80">
+                            {/* Header & Quick stats */}
+                            <div className="flex items-center justify-between text-[10px]">
+                              <span className="font-bold text-slate-700 flex items-center gap-1">
+                                <Calendar className="w-3.5 h-3.5 text-emerald-600" />
+                                <span>تاريخ إنتاج البيض المسحوب:</span>
+                              </span>
+                              <div className="flex items-center gap-1.5 font-mono">
+                                <span className="text-[10px] font-black text-emerald-900 bg-emerald-100/90 px-1.5 py-0.5 rounded-md">
+                                  {totalEggsCount} بيضة
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Dropdown Selector */}
+                            <div className="flex items-center gap-1.5">
+                              <select
+                                value={item.batchId || 'fifo'}
+                                onChange={(e) => updateItemEggBatch(item.productId, e.target.value)}
+                                className="w-full text-[11px] font-mono font-bold bg-white border border-slate-300 rounded-xl px-2 py-1.5 text-slate-800 outline-none focus:border-emerald-500 shadow-xs"
+                              >
+                                <option value="fifo">
+                                  🎯 تلقائي (الأقدم أولاً FIFO) - إجمالي المخزن: {groupedEggBatchesByDate.reduce((sum, g) => sum + g.totalCages, 0)} طبق
+                                </option>
+                                <optgroup label="اختر تاريخ إنتاج محدد:">
+                                  {groupedEggBatchesByDate.map((g) => (
+                                    <option key={g.productionDate} value={g.productionDate}>
+                                      📅 إنتاج {g.productionDate} (المتوفر: {g.totalCages} طبق)
+                                    </option>
+                                  ))}
+                                </optgroup>
+                                <option value="custom">
+                                  🗂️ تخصيص وتوزيع يدوي بين عدة تواريخ...
+                                </option>
+                              </select>
+
+                              <button
+                                type="button"
+                                onClick={() => openCustomAllocationModal(item)}
+                                className="p-1.5 rounded-xl bg-white hover:bg-emerald-50 text-emerald-700 border border-slate-200 shadow-2xs hover:border-emerald-300 transition-colors shrink-0"
+                                title="توزيع يدوي مخصص لكميات الأطباق عبر التواريخ"
+                              >
+                                <SlidersHorizontal className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+
+                            {/* Quick Add Presets (+5, +10, +20 trays) */}
+                            <div className="flex items-center justify-between text-[10px]">
+                              <span className="text-slate-500 font-bold">إضافة سريعة:</span>
+                              <div className="flex items-center gap-1">
+                                {[5, 10, 20].map((inc) => (
+                                  <button
+                                    key={inc}
+                                    type="button"
+                                    onClick={() => setItemExactQuantity(item.productId, item.quantity + inc)}
+                                    className="px-1.5 py-0.5 rounded-lg bg-white hover:bg-emerald-600 hover:text-white text-slate-700 font-mono font-bold border border-slate-200 shadow-2xs transition-colors"
+                                  >
+                                    +{inc}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+
+                            {/* Deficit Alert Banner if requested quantity exceeds primary date stock */}
+                            {hasDeficit && (
+                              <div className="p-2 rounded-xl bg-amber-50 border border-amber-300 text-[10.5px] space-y-1.5 animate-fadeIn">
+                                <div className="text-amber-900 font-bold leading-tight flex items-start gap-1">
+                                  <span className="text-amber-600 shrink-0">⚠️</span>
+                                  <span>
+                                    تاريخ <b>{item.batchId}</b> يحتوي على <b>{allocInfo.primaryAvailable} طبق</b> فقط، بينما المطلوب <b>{item.quantity} طبق</b> (عجز: <b>{allocInfo.deficit} طبق</b>).
+                                  </span>
+                                </div>
+                                <div className="text-[10px] text-slate-600 font-bold">
+                                  كيف ترغب في توفية العجز المتبقي ({allocInfo.deficit} طبق)؟
+                                </div>
+                                <div className="grid grid-cols-2 gap-1.5 pt-0.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => updateItemStrategy(item.productId, 'next_newer')}
+                                    className={`px-2 py-1.5 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1 transition-all ${
+                                      (item.fulfillmentStrategy || 'next_newer') === 'next_newer'
+                                        ? 'bg-emerald-600 text-white shadow-xs'
+                                        : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200'
+                                    }`}
+                                  >
+                                    <span>⭐ الأحدث التالي (طازج)</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => updateItemStrategy(item.productId, 'oldest_fifo')}
+                                    className={`px-2 py-1.5 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1 transition-all ${
+                                      item.fulfillmentStrategy === 'oldest_fifo'
+                                        ? 'bg-emerald-600 text-white shadow-xs'
+                                        : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200'
+                                    }`}
+                                  >
+                                    <span>⏳ الأقدم بالمخزن (FIFO)</span>
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Active Allocation Pill */}
+                            {item.batchAllocations && item.batchAllocations.length > 0 && (
+                              <div className="px-2 py-1 rounded-lg bg-emerald-100/70 border border-emerald-200/80 text-[10px] flex items-center justify-between text-emerald-900 font-mono">
+                                <span className="font-bold flex items-center gap-1">
+                                  <PackageCheck className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                                  <span className="truncate">
+                                    توزيع الصرف: {item.batchAllocations.map((a) => `${a.quantity} طبق (${a.productionDate})`).join(' + ')}
+                                  </span>
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => openCustomAllocationModal(item)}
+                                  className="text-emerald-800 hover:underline font-bold text-[9px] shrink-0 mr-1"
+                                >
+                                  تعديل
+                                </button>
+                              </div>
+                            )}
                           </div>
-                          <select
-                            value={item.batchId || 'fifo'}
-                            onChange={(e) => updateItemBatch(item.productId, e.target.value)}
-                            className="w-full text-[11px] font-mono font-bold bg-white border border-slate-300 rounded-xl px-2 py-1.5 text-slate-800 outline-none focus:border-emerald-500 shadow-xs"
-                          >
-                            <option value="fifo">
-                              🎯 تلقائي (الأقدم FIFO): {sortedAvailableEggBatches[0].productionDate} ({sortedAvailableEggBatches[0].cagesCount} قفص متاح)
-                            </option>
-                            {sortedAvailableEggBatches.map((b) => (
-                              <option key={b.id} value={b.id}>
-                                دفعة {b.productionDate} ({b.batchCode}) - متبقي {b.cagesCount} قفص
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      )}
+                        );
+                      })()}
                     </div>
                   );
                 })
@@ -1397,6 +1847,29 @@ export const POSView: React.FC = () => {
               )}
             </div>
 
+            {/* Customer Statement / Order Note (بيان أو ملاحظة للعميل) */}
+            <div className="space-y-1">
+              <div className="flex items-center justify-between">
+                <label className="text-[11px] font-bold text-slate-700 flex items-center gap-1.5">
+                  <FileText className="w-3.5 h-3.5 text-slate-500" />
+                  <span>بيان أو ملاحظة للعميل</span>
+                </label>
+                <span className="text-[10px] font-bold text-slate-400">
+                  (اختياري)
+                </span>
+              </div>
+
+              <div className="relative">
+                <input
+                  type="text"
+                  placeholder="أدخل بيان أو ملاحظة إضافية للعميل (اختياري)..."
+                  value={orderNotes}
+                  onChange={(e) => setOrderNotes(e.target.value)}
+                  className="w-full px-3 py-1.5 text-xs rounded-2xl border border-slate-200 bg-white text-slate-900 placeholder:text-slate-400 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all outline-none"
+                />
+              </div>
+            </div>
+
             {/* Summary Totals */}
             <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 space-y-1 text-xs">
               <div className="flex justify-between text-slate-500">
@@ -1506,6 +1979,12 @@ export const POSView: React.FC = () => {
                     )}
                     <div>التاريخ: {printedInvoice.date} {printedInvoice.time}</div>
                     <div>العميل: {printedInvoice.customerName}</div>
+                    {printedInvoice.notes && (
+                      <div className="text-[10px] text-slate-800 bg-slate-50 p-1 rounded border border-dashed border-slate-300 mt-0.5">
+                        <span className="font-bold">بيان / ملاحظة: </span>
+                        <span>{printedInvoice.notes}</span>
+                      </div>
+                    )}
                     <div>الكاشير: {printedInvoice.cashierName}</div>
                   </div>
 
@@ -1519,11 +1998,19 @@ export const POSView: React.FC = () => {
                     {printedInvoice.items.map((it, idx) => (
                       <div key={idx} className="py-1 text-[11px]">
                         <div className="font-bold">{it.productName}</div>
-                        {it.productionDate && (
+                        {it.batchAllocations && it.batchAllocations.length > 0 ? (
+                          <div className="text-[10px] text-slate-700 font-sans space-y-0.5 my-0.5 pr-1 border-r-2 border-emerald-500">
+                            {it.batchAllocations.map((ba, bIdx) => (
+                              <div key={bIdx}>
+                                • {ba.quantity} طبق [إنتاج: {ba.productionDate}]
+                              </div>
+                            ))}
+                          </div>
+                        ) : it.productionDate ? (
                           <div className="text-[10px] text-slate-600 font-sans">
                             [تاريخ الإنتاج: {it.productionDate}]
                           </div>
-                        )}
+                        ) : null}
                         <div className="flex justify-between text-slate-600 text-[10px]">
                           <span>{it.quantity} {it.unit} × {it.unitPrice}</span>
                           <span className="font-bold text-black">{it.total} {farmSettings.currency}</span>
@@ -1603,10 +2090,16 @@ export const POSView: React.FC = () => {
                   </div>
 
                   {/* Customer Info */}
-                  <div className="my-4 p-3 rounded-xl bg-slate-50 border border-slate-100 flex justify-between">
+                  <div className="my-4 p-3 rounded-xl bg-slate-50 border border-slate-100 flex justify-between items-center">
                     <div>
                       <span className="font-bold text-slate-500 block text-[10px]">فاتورة صادرة إلى:</span>
                       <span className="font-bold text-sm text-slate-900">{printedInvoice.customerName}</span>
+                      {printedInvoice.notes && (
+                        <div className="text-[11px] text-slate-600 mt-1">
+                          <span className="font-bold">ملاحظات / البيان: </span>
+                          <span>{printedInvoice.notes}</span>
+                        </div>
+                      )}
                     </div>
                     <div className="text-left">
                       <span className="font-bold text-slate-500 block text-[10px]">طريقة الدفع:</span>
@@ -1634,11 +2127,19 @@ export const POSView: React.FC = () => {
                           <td className="p-2.5 font-mono">{idx + 1}</td>
                           <td className="p-2.5 font-bold">
                             <div>{it.productName}</div>
-                            {it.productionDate && (
+                            {it.batchAllocations && it.batchAllocations.length > 0 ? (
+                              <div className="text-[10px] text-slate-600 font-normal space-y-0.5 mt-0.5 pr-1 border-r-2 border-emerald-500">
+                                {it.batchAllocations.map((ba, bIdx) => (
+                                  <div key={bIdx}>
+                                    • {ba.quantity} طبق [إنتاج: {ba.productionDate}]
+                                  </div>
+                                ))}
+                              </div>
+                            ) : it.productionDate ? (
                               <div className="text-[10px] text-slate-500 font-normal">
                                 تاريخ الإنتاج: {it.productionDate}
                               </div>
-                            )}
+                            ) : null}
                           </td>
                           <td className="p-2.5 text-center font-mono font-bold">{it.quantity}</td>
                           <td className="p-2.5 text-center">{it.unit}</td>
@@ -1847,7 +2348,14 @@ export const POSView: React.FC = () => {
                                   )}
                                 </td>
                                 <td className="p-2.5 font-mono text-slate-500">{inv.time}</td>
-                                <td className="p-2.5 font-bold text-slate-900">{inv.customerName}</td>
+                                <td className="p-2.5 text-slate-900">
+                                  <div className="font-bold">{inv.customerName}</div>
+                                  {inv.notes && (
+                                    <div className="text-[10px] text-slate-500 font-normal truncate max-w-[140px]" title={inv.notes}>
+                                      📝 {inv.notes}
+                                    </div>
+                                  )}
+                                </td>
                                 <td className="p-2.5">
                                   <span
                                     className={`px-2 py-0.5 rounded-full font-bold text-[10px] ${
@@ -2584,6 +3092,159 @@ export const POSView: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Custom Multi-Batch Allocation Modal */}
+      {allocatingItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-3xl p-6 max-w-lg w-full shadow-apple-modal border border-slate-100 text-right space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2 text-emerald-800">
+                <Split className="w-5 h-5 text-emerald-600" />
+                <h3 className="text-base font-black text-slate-900">
+                  توزيع أطباق البيض عبر تواريخ الإنتاج
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAllocatingItem(null)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-xl"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200/80 space-y-2">
+              <div className="flex justify-between items-center text-xs">
+                <span className="font-bold text-slate-600">الصنف:</span>
+                <span className="font-black text-slate-900">{allocatingItem.productName}</span>
+              </div>
+              <div className="flex justify-between items-center text-xs">
+                <span className="font-bold text-slate-600">الكمية المطلوبة في الفاتورة:</span>
+                <span className="font-black font-mono text-emerald-700 text-sm">
+                  {allocatingItem.quantity} طبق
+                </span>
+              </div>
+
+              {/* Live Tally Progress */}
+              {(() => {
+                const totalAlloc = Object.values(customAllocationDraft).reduce(
+                  (sum, q) => sum + (Number(q) || 0),
+                  0
+                );
+                const diff = allocatingItem.quantity - totalAlloc;
+
+                return (
+                  <div
+                    className={`p-2.5 rounded-xl border text-xs flex items-center justify-between ${
+                      diff === 0
+                        ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
+                        : 'bg-rose-50 border-rose-300 text-rose-900'
+                    }`}
+                  >
+                    <span className="font-bold">
+                      {diff === 0
+                        ? '✅ التوزيع مطابق تماماً لكمية الطلب'
+                        : diff > 0
+                        ? `⚠️ متبقي للتوزيع: ${diff} طبق`
+                        : `⚠️ تجاوزت الكمية المطلوبة بـ: ${Math.abs(diff)} طبق`}
+                    </span>
+                    <span className="font-mono font-black">
+                      {totalAlloc} / {allocatingItem.quantity} طبق
+                    </span>
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Date rows */}
+            <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+              <label className="block text-xs font-bold text-slate-700">
+                حدد عدد الأطباق المسحوبة من كل تاريخ إنتاج بالمستودع:
+              </label>
+              {groupedEggBatchesByDate.map((group) => {
+                const currentVal = customAllocationDraft[group.productionDate] || 0;
+                return (
+                  <div
+                    key={group.productionDate}
+                    className="flex items-center justify-between p-2.5 rounded-2xl bg-white border border-slate-200 hover:border-emerald-300 transition-colors"
+                  >
+                    <div>
+                      <div className="font-mono font-black text-xs text-slate-900 flex items-center gap-1.5">
+                        <Calendar className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>إنتاج: {group.productionDate}</span>
+                      </div>
+                      <div className="text-[10px] text-slate-500 font-bold mt-0.5">
+                        المتوفر بالمخزن: <span className="font-mono text-slate-700">{group.totalCages}</span> طبق
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const totalOther = Object.entries(customAllocationDraft).reduce(
+                            (sum, [d, q]) => (d === group.productionDate ? sum : sum + (Number(q) || 0)),
+                            0
+                          );
+                          const needed = Math.max(0, allocatingItem.quantity - totalOther);
+                          const take = Math.min(group.totalCages, needed);
+                          setCustomAllocationDraft((prev) => ({
+                            ...prev,
+                            [group.productionDate]: take,
+                          }));
+                        }}
+                        className="px-2 py-1 text-[10px] font-bold rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200"
+                        title="أخذ الكمية المطلوبة أو المتاح"
+                      >
+                        توفية
+                      </button>
+
+                      <input
+                        type="number"
+                        min="0"
+                        max={group.totalCages}
+                        value={currentVal || ''}
+                        placeholder="0"
+                        onChange={(e) => {
+                          const val = Math.max(0, Math.min(group.totalCages, Number(e.target.value) || 0));
+                          setCustomAllocationDraft((prev) => ({
+                            ...prev,
+                            [group.productionDate]: val,
+                          }));
+                        }}
+                        className="w-16 px-2 py-1 text-center font-mono font-black text-xs bg-slate-50 border border-slate-300 rounded-xl focus:border-emerald-500 outline-none"
+                      />
+                      <span className="text-[10px] font-bold text-slate-400">طبق</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="flex gap-2 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={handleSaveCustomAllocation}
+                disabled={
+                  Object.values(customAllocationDraft).reduce((sum, q) => sum + (Number(q) || 0), 0) !==
+                  allocatingItem.quantity
+                }
+                className="flex-1 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-black text-xs shadow-apple flex items-center justify-center gap-1.5 transition-all"
+              >
+                <PackageCheck className="w-4 h-4" />
+                <span>حفظ وتثبيت التوزيع</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setAllocatingItem(null)}
+                className="px-5 py-3 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition-all"
+              >
+                إلغاء
+              </button>
+            </div>
           </div>
         </div>
       )}

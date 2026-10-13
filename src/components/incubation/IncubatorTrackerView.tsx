@@ -14,6 +14,7 @@ import type {
   TransferDestinationType,
 } from '../../types';
 import { DEFAULT_BROODING_RATES, STRICT_ARABIC_BATTERY_ORDER } from '../../types';
+import { executeAutomatedDailyFeedDeduction } from '../../services/autoFeedService';
 import { useToast } from '../../context/ToastContext';
 import { useAuth } from '../../context/AuthContext';
 import confetti from 'canvas-confetti';
@@ -107,7 +108,20 @@ export const IncubatorTrackerView: React.FC = () => {
   const [showScheduleSettingsModal, setShowScheduleSettingsModal] = useState(false);
   const [activeBatchForMortality, setActiveBatchForMortality] = useState<BroodingBatch | null>(null);
   const [mortalityQtyInput, setMortalityQtyInput] = useState(1);
+  const [mortalityDateInput, setMortalityDateInput] = useState(todayStr);
+  const [mortalityReasonInput, setMortalityReasonInput] = useState('ضعف صوص اعتيادي');
   const [mortalityNotesInput, setMortalityNotesInput] = useState('');
+
+  // Automated Daily Feed Consumption Engine (خصم استهلاك الأعلاف تلقائياً عند فتح الشاشة)
+  useEffect(() => {
+    executeAutomatedDailyFeedDeduction()
+      .then((res) => {
+        if (res.executed) {
+          toast(res.summaryMessage, 'success');
+        }
+      })
+      .catch((err) => console.error('Auto feed trigger error in IncubatorTrackerView:', err));
+  }, [toast]);
 
   // Add Brooding Form state
   const [broodBatchNumber, setBroodBatchNumber] = useState('');
@@ -443,23 +457,36 @@ export const IncubatorTrackerView: React.FC = () => {
       updatedAt: new Date().toISOString(),
     });
 
+    // Calculate chick age at mortality date based on hatch date
+    const hatchDateObj = new Date(activeBatchForMortality.hatchDate);
+    const mortDateObj = new Date(mortalityDateInput || todayStr);
+    const ageAtDeath = Math.max(
+      1,
+      Math.floor((mortDateObj.getTime() - hatchDateObj.getTime()) / (1000 * 60 * 60 * 24)) + 1
+    );
+
     // Also log to detailed mortality
     await db.detailedMortality.add({
       id: `dm-brood-${Date.now()}`,
-      date: todayStr,
+      date: mortalityDateInput || todayStr,
       time: new Date().toTimeString().slice(0, 5),
-      description: `نفوق كتاكيت تحضين دفعة (${activeBatchForMortality.batchNumber}) - ${mortalityNotesInput || 'نفوق اعتيادي'}`,
+      description: `نفوق صيصان تحضين دفعة (${activeBatchForMortality.batchNumber}) - ${mortalityReasonInput}${mortalityNotesInput ? ` (${mortalityNotesInput})` : ''}`,
       gender: 'mixed',
-      locationType: 'room',
+      locationType: 'brooding',
       roomName: activeBatchForMortality.locationName,
-      exactLocationText: activeBatchForMortality.locationName,
+      exactLocationText: `حضانة كتاكيت - دفعة (${activeBatchForMortality.batchNumber}) - ${activeBatchForMortality.locationName}`,
       quantity: qty,
       disposalMethod: 'burial',
+      mortalityReason: mortalityReasonInput,
+      ageAtDeath: `عمر ${ageAtDeath} يوم`,
+      ageAtDeathDays: ageAtDeath,
+      broodingBatchId: activeBatchForMortality.id,
+      broodingBatchNumber: activeBatchForMortality.batchNumber,
       recordedBy: userName || 'عامل التحضين',
       createdAt: new Date().toISOString(),
     });
 
-    toast(`تم تسجيل نفوق ${qty} كتكوت. المتبقي الحي: ${newCurrent} كتكوت`, 'warning');
+    toast(`تم تسجيل نفوق ${qty} كتكوت بتاريخ ${mortalityDateInput} (عمر ${ageAtDeath} يوم). المتبقي الحي: ${newCurrent} كتكوت`, 'warning');
     setActiveBatchForMortality(null);
   };
 
@@ -1136,11 +1163,17 @@ export const IncubatorTrackerView: React.FC = () => {
                 <Zap className="w-5 h-5 fill-current" />
               </div>
               <div>
-                <h4 className="font-black text-sm text-slate-900">
-                  الأتمتة اليومية لتغذية دفعات التحضين (استهلاك تصاعدي حسب العمر)
-                </h4>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h4 className="font-black text-sm text-slate-900">
+                    الأتمتة اليومية لتغذية دفعات التحضين (استهلاك تصاعدي حسب العمر)
+                  </h4>
+                  <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                    <span>الخصم الآلي: نشط ومفعّل تلقائياً</span>
+                  </span>
+                </div>
                 <p className="text-xs text-slate-600 mt-0.5">
-                  يُحسب استهلاك كل دفعة تلقائياً: (عدد الكتاكيت الحية × معدل جرامات اليوم) ويُخصم من رصيد العلف المختار في المستودع.
+                  يتم احتساب وخصم استهلاك كل دفعة تلقائياً وبشكل دوري من المستودع دون الحاجة للضغط اليدوي (استهلاك تراكمي دقيق بالجرام).
                 </p>
               </div>
             </div>
@@ -1148,11 +1181,24 @@ export const IncubatorTrackerView: React.FC = () => {
             <button
               onClick={handleBulkDeductAllBrooding}
               disabled={activeBroodingList.length === 0}
-              className="px-5 py-2.5 rounded-2xl bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-white font-black text-xs flex items-center gap-2 shadow-apple transition-all whitespace-nowrap shrink-0"
-              title="خصم استهلاك اليوم لجميع دفعات التحضين التي لم يتم خصمها اليوم بعد"
+              className={`px-5 py-2.5 rounded-2xl font-black text-xs flex items-center gap-2 shadow-apple transition-all whitespace-nowrap shrink-0 ${
+                activeBroodingList.length > 0 && activeBroodingList.every((b) => b.lastFeedDeductionDate === todayStr)
+                  ? 'bg-emerald-700 text-white'
+                  : 'bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-white'
+              }`}
+              title="خصم استهلاك اليوم لجميع دفعات التحضين تلقائياً"
             >
-              <Zap className="w-4 h-4 fill-current" />
-              <span>⚡ خصم استهلاك اليوم لجميع الدفعات ({Math.round(totalDailyBroodKg * 100) / 100} كغم)</span>
+              {activeBroodingList.length > 0 && activeBroodingList.every((b) => b.lastFeedDeductionDate === todayStr) ? (
+                <>
+                  <CheckCircle2 className="w-4 h-4 text-emerald-300" />
+                  <span>✅ تم الخصم التلقائي لجميع الدفعات اليوم ({Math.round(totalDailyBroodKg * 100) / 100} كغم)</span>
+                </>
+              ) : (
+                <>
+                  <Zap className="w-4 h-4 fill-current" />
+                  <span>⚡ خصم استهلاك اليوم لجميع الدفعات ({Math.round(totalDailyBroodKg * 100) / 100} كغم)</span>
+                </>
+              )}
             </button>
           </div>
 
@@ -1350,6 +1396,8 @@ export const IncubatorTrackerView: React.FC = () => {
                           onClick={() => {
                             setActiveBatchForMortality(batch);
                             setMortalityQtyInput(1);
+                            setMortalityDateInput(todayStr);
+                            setMortalityReasonInput('ضعف صوص اعتيادي');
                             setMortalityNotesInput('');
                           }}
                           className="text-[10px] font-bold text-rose-600 hover:text-rose-800 underline mt-0.5"
@@ -2926,16 +2974,16 @@ export const IncubatorTrackerView: React.FC = () => {
       {/* Modal: Record Mortality for Brooding Batch */}
       {activeBatchForMortality && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-fadeIn">
-          <div className="bg-white rounded-3xl p-6 max-w-sm w-full shadow-apple-modal border border-slate-100 text-right">
+          <div className="bg-white rounded-3xl p-6 max-w-md w-full shadow-apple-modal border border-slate-100 text-right">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
               <div className="flex items-center gap-2">
-                <div className="p-2 rounded-xl bg-rose-100 text-rose-700">
+                <div className="p-2.5 rounded-2xl bg-rose-100 text-rose-700">
                   <Skull className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="text-base font-black text-slate-900">تسجيل نفوق صيصان</h3>
+                  <h3 className="text-base font-black text-slate-900">تسجيل نفوق صيصان التحضين</h3>
                   <p className="text-[11px] text-slate-500">
-                    الدفعة: {activeBatchForMortality.batchNumber}
+                    الدفعة: <span className="font-mono font-bold text-slate-700">{activeBatchForMortality.batchNumber}</span> | تاريخ الفقس: {activeBatchForMortality.hatchDate}
                   </p>
                 </div>
               </div>
@@ -2948,6 +2996,34 @@ export const IncubatorTrackerView: React.FC = () => {
             </div>
 
             <form onSubmit={handleSaveMortality} className="space-y-4">
+              {/* Date of mortality picker */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  تاريخ تسجيل النفوق: <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="date"
+                  required
+                  value={mortalityDateInput}
+                  max={todayStr}
+                  min={activeBatchForMortality.hatchDate}
+                  onChange={(e) => setMortalityDateInput(e.target.value)}
+                  className="w-full glass-input text-xs font-mono font-bold text-slate-800"
+                />
+                {(() => {
+                  const hDate = new Date(activeBatchForMortality.hatchDate);
+                  const mDate = new Date(mortalityDateInput || todayStr);
+                  const ageCalc = Math.max(1, Math.floor((mDate.getTime() - hDate.getTime()) / (1000 * 60 * 60 * 24)) + 1);
+                  return (
+                    <div className="mt-1.5 flex items-center justify-between text-[11px] font-semibold text-amber-800 bg-amber-50/80 px-3 py-1.5 rounded-xl border border-amber-200">
+                      <span>عمر الصوص في تاريخ النفوق المختار:</span>
+                      <span className="font-bold font-mono text-amber-900">{ageCalc} يوم (الأسبوع {Math.min(5, Math.ceil(ageCalc / 7))})</span>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* Quantity */}
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
                   عدد الصيصان النافقة: <span className="text-rose-500">*</span>
@@ -2963,22 +3039,44 @@ export const IncubatorTrackerView: React.FC = () => {
                   autoFocus
                 />
                 <span className="text-[10px] text-slate-400 mt-1 block">
-                  العدد الحي الحالي بالدفعة: {activeBatchForMortality.currentChicksCount} كتكوت
+                  العدد الحي المتاح حالياً بالدفعة: {activeBatchForMortality.currentChicksCount} كتكوت
                 </span>
               </div>
 
+              {/* Reason */}
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">سبب النفوق وملاحظات:</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  سبب النفوق: <span className="text-rose-500">*</span>
+                </label>
+                <select
+                  value={mortalityReasonInput}
+                  onChange={(e) => setMortalityReasonInput(e.target.value)}
+                  className="w-full glass-input text-xs font-bold text-slate-800 bg-white"
+                >
+                  <option value="ضعف صوص اعتيادي">ضعف صوص اعتيادي (طفرة أو حجم صغير)</option>
+                  <option value="خلل في التدفئة / انخفاض الحرارة">خلل في التدفئة / انخفاض الحرارة</option>
+                  <option value="تزاحم ودهس واختناق">تزاحم ودهس واختناق</option>
+                  <option value="عدم امتصاص كيس المح">عدم امتصاص كيس المح (Omphalitis)</option>
+                  <option value="مرض معوي أو إسهال">مرض معوي أو إسهال</option>
+                  <option value="مرض تنفسي">مرض تنفسي</option>
+                  <option value="عوامل بيئية / تهوية ورطوبة">عوامل بيئية / تهوية ورطوبة</option>
+                  <option value="أخرى / غير محدد">أخرى / غير محدد</option>
+                </select>
+              </div>
+
+              {/* Notes */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">ملاحظات توثيقية إضافية:</label>
                 <input
                   type="text"
                   value={mortalityNotesInput}
                   onChange={(e) => setMortalityNotesInput(e.target.value)}
-                  placeholder="مثال: ضعف مناعة، اختناق تدفئة، دهس..."
+                  placeholder="مثال: لوحظ انخفاض في نشاط الصيصان في زاوية الحضانة..."
                   className="w-full glass-input text-xs"
                 />
               </div>
 
-              <div className="flex gap-2 pt-2 border-t border-slate-100">
+              <div className="flex gap-2 pt-3 border-t border-slate-100">
                 <button
                   type="submit"
                   className="flex-1 py-2.5 rounded-2xl bg-rose-600 hover:bg-rose-700 text-white font-black text-xs shadow-sm transition-all"

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ToastProvider, useToast } from './context/ToastContext';
 import { initializeDatabase } from './db/seedData';
+import { executeAutomatedDailyFeedDeduction } from './services/autoFeedService';
 
 // Layout
 import { Header } from './components/layout/Header';
@@ -42,6 +43,21 @@ const MainAppContent: React.FC = () => {
         setIsDbReady(true);
       });
   }, []);
+
+  // Automated Daily Feed Consumption Engine (خصم استهلاك الأعلاف اليومي تلقائياً)
+  useEffect(() => {
+    if (isDbReady) {
+      executeAutomatedDailyFeedDeduction()
+        .then((result) => {
+          if (result.executed) {
+            toast(result.summaryMessage, 'success');
+          }
+        })
+        .catch((err) => {
+          console.error('Auto feed deduction error:', err);
+        });
+    }
+  }, [isDbReady, toast]);
 
   // Ensure worker cannot stay on manager tabs
   useEffect(() => {
@@ -114,7 +130,7 @@ const MainAppContent: React.FC = () => {
       case 'accounting':
         return <AccountingView />;
       case 'analytics':
-        return <AnalyticsView />;
+        return <AnalyticsView onNavigateToEggLogs={() => setActiveTab('egg_production')} />;
       case 'settings':
         return <SettingsView />;
       default:

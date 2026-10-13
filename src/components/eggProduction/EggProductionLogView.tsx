@@ -28,6 +28,8 @@ import {
   Minus,
   ChevronDown,
   ChevronUp,
+  ChevronLeft,
+  ChevronRight,
   BarChart3,
   ArrowUpRight,
   ArrowDownRight,
@@ -54,6 +56,7 @@ export const EggProductionLogView: React.FC = () => {
 
   // View Mode: 'grid' = Rapid Matrix Entry (Default), 'history' = Previous Logs Table
   const [viewMode, setViewMode] = useState<'grid' | 'history'>('grid');
+  const [chartOffset, setChartOffset] = useState<number>(0);
 
   // Unified Evening Session Inputs
   const [entryDate, setEntryDate] = useState<string>(todayStr);
@@ -1589,17 +1592,41 @@ export const EggProductionLogView: React.FC = () => {
                     مقارنة حركة الإنتاج اليومي بالرسم البياني
                   </h4>
                   <span className="text-[10px] text-slate-400 font-bold">
-                    (عرض {Math.min(filteredDailyAggregates.length, 14)} يوماً)
+                    (عرض {Math.min(filteredDailyAggregates.length - chartOffset, 14)} يوماً)
                   </span>
                 </div>
-                <span className="text-[10px] font-bold text-slate-400">
-                  الأعلى إنتاجاً مميز بالتاج 👑
-                </span>
+                <div className="flex items-center gap-2">
+                  {/* Chart Navigation Arrows */}
+                  {filteredDailyAggregates.length > 14 && (
+                    <div className="flex items-center bg-slate-100 p-0.5 rounded-xl border border-slate-200">
+                      <button
+                        onClick={() => setChartOffset((prev) => Math.min(prev + 7, Math.max(0, filteredDailyAggregates.length - 14)))}
+                        disabled={chartOffset + 14 >= filteredDailyAggregates.length}
+                        className="p-1 rounded-lg hover:bg-white text-slate-700 disabled:opacity-30 disabled:pointer-events-none transition-all"
+                        title="الأيام السابقة"
+                      >
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      </button>
+                      <span className="text-[10px] font-bold text-slate-500 px-1.5 select-none">تنقل</span>
+                      <button
+                        onClick={() => setChartOffset((prev) => Math.max(0, prev - 7))}
+                        disabled={chartOffset === 0}
+                        className="p-1 rounded-lg hover:bg-white text-slate-700 disabled:opacity-30 disabled:pointer-events-none transition-all"
+                        title="الأيام اللاحقة"
+                      >
+                        <ChevronLeft className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
+                  <span className="text-[10px] font-bold text-slate-400">
+                    الأعلى إنتاجاً مميز بالتاج 👑
+                  </span>
+                </div>
               </div>
 
               {/* Bars container (reversed so earlier dates are on the right/left naturally) */}
               <div className="flex items-end gap-2 sm:gap-3 h-32 pt-4 px-2 overflow-x-auto pb-1 border-b border-slate-100">
-                {[...filteredDailyAggregates.slice(0, 14)].reverse().map((day) => {
+                {[...filteredDailyAggregates.slice(chartOffset, chartOffset + 14)].reverse().map((day) => {
                   const isPeak = stats.peakDay?.date === day.date;
                   const dayDetails = getArabicDayDetails(day.date);
                   const heightPercent = Math.max(

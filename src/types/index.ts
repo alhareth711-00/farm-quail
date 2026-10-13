@@ -434,7 +434,7 @@ export interface DetailedMortalityRecord {
   time: string; // HH:mm
   description: string; // البيان / السبب / الأعراض
   gender: 'male' | 'female' | 'mixed' | 'unidentified'; // ذكر / أنثى / مختلط
-  locationType: 'battery' | 'room' | 'quarantine' | 'annex';
+  locationType: 'battery' | 'room' | 'quarantine' | 'annex' | 'brooding';
   batteryName?: string; // أ، ب، ج... حتى س
   tierNumber?: 1 | 2 | 3 | 4; // رقم الدور
   cageNumber?: string; // رقم القفص
@@ -444,6 +444,13 @@ export interface DetailedMortalityRecord {
   disposalMethod: 'burial' | 'incineration' | 'quarantine_transfer' | 'other'; // الإجراء المتخذ
   recordedBy: string;
   createdAt: string;
+
+  // New fields: سبب النفوق والعمر عند النفوق وربط دفعات التحضين
+  mortalityReason?: string; // سبب النفوق (مثل: ضعف كتاكيت، دهس وتزاحم، حرارة وتدفئة، طبيعي ومفاجئ، مرض معوي/تنفسي، افتراس...)
+  ageAtDeath?: string; // العمر عند النفوق (مثل: "عمر 9 أيام" أو "طير بياض بالغ")
+  ageAtDeathDays?: number; // العمر بالأيام
+  broodingBatchId?: string; // معرّف دفعة التحضين في حال كان النافق لصيصان تحضين
+  broodingBatchNumber?: string; // رقم دفعة التحضين (مثال: BRD-2026-001)
 }
 
 // --- 9. POS, Products, Customers & Sales ---
@@ -482,6 +489,13 @@ export interface Customer {
   notes?: string;
 }
 
+export interface BatchAllocation {
+  batchId?: string;
+  batchCode?: string;
+  productionDate: string;
+  quantity: number;
+}
+
 export interface OrderItem {
   productId: string;
   productName: string;
@@ -491,7 +505,9 @@ export interface OrderItem {
   costPrice?: number; // التكلفة التقديرية للقطعة في الفاتورة لحساب الأرباح
   total: number;
   productionDate?: string; // تاريخ إنتاج البيض المباع من الدفعات المتوفرة
-  batchId?: string; // معرف الدفعة المصروفة
+  batchId?: string; // معرف الدفعة المصروفة أو 'fifo' أو تاريخ محدد أو 'custom'
+  batchAllocations?: BatchAllocation[]; // تفصيل توزيع الكميات على تواريخ الإنتاج المتعددة
+  fulfillmentStrategy?: 'next_newer' | 'oldest_fifo' | 'custom'; // استراتيجية توفية العجز
 }
 
 export type PaymentMethod = 

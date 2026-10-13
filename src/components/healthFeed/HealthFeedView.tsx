@@ -8,6 +8,7 @@ import {
   purchaseFeedStock,
   calculateWeightedAverageCost,
 } from '../../services/feedPurchaseService';
+import { executeAutomatedDailyFeedDeduction } from '../../services/autoFeedService';
 import {
   HeartPulse,
   Plus,
@@ -81,6 +82,17 @@ export const HealthFeedView: React.FC = () => {
     };
     migrateThresholds();
   }, []);
+
+  // Automated Daily Feed Consumption Engine (خصم استهلاك الأعلاف تلقائياً عند فتح الشاشة)
+  useEffect(() => {
+    executeAutomatedDailyFeedDeduction()
+      .then((res) => {
+        if (res.executed) {
+          toast(res.summaryMessage, 'success');
+        }
+      })
+      .catch((err) => console.error('Auto feed trigger error in HealthFeedView:', err));
+  }, [toast]);
 
   // Modals
   const [showAddMedModal, setShowAddMedModal] = useState(false);
@@ -701,18 +713,22 @@ export const HealthFeedView: React.FC = () => {
               <h3 className="text-base font-black text-slate-900">
                 استهلاك العلف اليومي المؤتمت (قطيع البياض وذكور التخصيب)
               </h3>
+              <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                <span>الخصم الآلي: نشط ومفعّل تلقائياً</span>
+              </span>
               <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-200">
                 معيار قياسي: 30 جرام / طير يومياً
               </span>
               {isLayerConsumptionRecordedToday && (
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200 flex items-center gap-1">
-                  <CheckCircle2 className="w-3 h-3" />
-                  <span>تم التسجيل اليوم ({todayRecordedKg.toLocaleString('ar-SA')} كغم)</span>
+                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                  <span>تم الخصم لليوم ({todayRecordedKg.toLocaleString('ar-SA')} كغم)</span>
                 </span>
               )}
             </div>
             <p className="text-xs text-slate-600 leading-relaxed max-w-2xl">
-              يتم احتساب الاستهلاك اليومي لعلف البياض بدقة استناداً إلى تعداد الإناث والذكور المختلطة للتخصيب بالبطاريات والعنابر، مع الخصم الفوري من رصيد المستودع وقيد التكلفة التشغيلية.
+              يتم احتساب وخصم الاستهلاك اليومي لعلف البياض تلقائياً وبشكل مؤتمت دون الحاجة للضغط اليدوي استناداً إلى تعداد إناث وذكور التخصيب، مع القيد المالي والمخزني الفوري.
             </p>
             <div className="flex flex-wrap gap-4 pt-1 text-xs">
               <div>
@@ -755,17 +771,21 @@ export const HealthFeedView: React.FC = () => {
               layerFeed?.isActive === false
                 ? 'bg-slate-300 text-slate-600 cursor-not-allowed'
                 : isLayerConsumptionRecordedToday
-                ? 'bg-amber-600 hover:bg-amber-700 text-white'
+                ? 'bg-emerald-700 hover:bg-emerald-800 text-white'
                 : 'bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-white'
             }`}
-            title="خصم استهلاك اليوم بدقة وتسجيل التكلفة"
+            title="تم الخصم تلقائياً بواسطة النظام الذكي، أو انقر لإضافة استهلاك إضافي"
           >
-            <Zap className="w-4 h-4 fill-current" />
+            {isLayerConsumptionRecordedToday ? (
+              <CheckCircle2 className="w-4 h-4 text-emerald-300" />
+            ) : (
+              <Zap className="w-4 h-4 fill-current" />
+            )}
             <span>
               {layerFeed?.isActive === false
                 ? '⏸️ علف البياض متوقف مؤقتاً'
                 : isLayerConsumptionRecordedToday
-                ? 'تسجيل استهلاك إضافي لليوم'
+                ? `✅ تم الخصم التلقائي لليوم (${todayRecordedKg.toLocaleString('ar-SA')} كغم) • تسجيل إضافي`
                 : `⚡ تسجيل استهلاك اليوم (${dailyLayerKg.toLocaleString('ar-SA')} كغم)`}
             </span>
           </button>
@@ -1495,10 +1515,10 @@ export const HealthFeedView: React.FC = () => {
               </div>
 
               {/* Quick Preset: Layer flock daily consumption */}
-              {totalLayerFemales > 0 && (
+              {totalLayerBreedingFlock > 0 && (
                 <div className="p-3 rounded-2xl bg-amber-50 border border-amber-200 text-xs flex items-center justify-between">
                   <div className="text-[11px] text-amber-950 font-bold">
-                    استهلاك قطيع البياض ({totalLayerFemales.toLocaleString('ar-SA')} أنثى × 30 جم = {dailyLayerKg} كغم)
+                    استهلاك قطيع البياض والتخصيب ({totalLayerBreedingFlock.toLocaleString('ar-SA')} طائر: {totalLayerFemales} إناث + {totalBreedingMales} ذكور = {dailyLayerKg} كغم)
                   </div>
                   <button
                     type="button"

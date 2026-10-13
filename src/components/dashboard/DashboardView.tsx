@@ -85,16 +85,21 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   const totalBatteryBirds =
     tiers?.reduce((acc, t) => acc + (t.malesCount + t.femalesCount), 0) || 0;
   const totalBatteryFemales = tiers?.reduce((acc, t) => acc + t.femalesCount, 0) || 0;
+  const totalBatteryMales = tiers?.reduce((acc, t) => acc + (t.malesCount || 0), 0) || 0;
 
   const totalRoomBirds =
     rooms?.reduce((acc, r) => acc + (r.malesCount + r.femalesCount), 0) || 0;
+  const layerRooms =
+    rooms?.filter((r) => r.purpose === 'layers' || r.name?.includes('بياض') || r.name?.includes('أمهات')) || [];
   const totalRoomFemales =
-    rooms
-      ?.filter((r) => r.purpose === 'layers')
-      .reduce((acc, r) => acc + r.femalesCount, 0) || 0;
+    layerRooms.reduce((acc, r) => acc + r.femalesCount, 0) || 0;
+  const totalRoomMales =
+    layerRooms.reduce((acc, r) => acc + (r.malesCount || 0), 0) || 0;
 
   const totalFlockBirds = totalBatteryBirds + totalRoomBirds;
-  const totalLayingHens = totalBatteryFemales + totalRoomFemales;
+  const totalLayingHens = totalBatteryFemales + totalRoomFemales; // الإناث البياضة (لحساب نسبة وضع البيض)
+  const totalBreedingMales = totalBatteryMales + totalRoomMales; // ذكور التخصيب المختلطة
+  const totalLayerFlock = totalLayingHens + totalBreedingMales; // إجمالي قطيع البياض والتخصيب المستهلك لعلف البياض
 
   // Today's eggs & packaging
   const todayEggLogs = eggLogs?.filter((l) => l.collectionDate === todayStr) || [];
@@ -250,8 +255,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
     : Math.round(growerEstimatedDailyCost * currentDayOfMonth);
   const growerBagsMonth = Math.round((growerKgMonth / growerBagWeight) * 100) / 100;
 
-  // 3. Layer Flock & Rates (Laying females standard 30g/day)
-  const layerEstimatedDailyKg = (totalLayingHens * 30) / 1000;
+  // 3. Layer Flock & Rates (Laying flock standard 30g/day per bird: females + breeding males)
+  const isLayerFeedActive = layerStock?.isActive !== false;
+  const layerEstimatedDailyKg = isLayerFeedActive ? (totalLayerFlock * 30) / 1000 : 0;
   const layerEstimatedDailyCost = layerEstimatedDailyKg * layerCostPerKg;
   const layerEstimatedDailyBags = layerEstimatedDailyKg / layerBagWeight;
 
@@ -976,12 +982,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
                     <span className="text-[11px] text-slate-300 block mb-1">إجمالي القطيع المتغذّي</span>
                     <div className="flex items-baseline gap-1.5 font-mono">
                       <span className="text-xl font-black text-white">
-                        {(p1ChicksCount + totalGrowerBirds + totalLayingHens).toLocaleString('ar-SA')}
+                        {(p1ChicksCount + totalGrowerBirds + totalLayerFlock).toLocaleString('ar-SA')}
                       </span>
                       <span className="text-[10px] text-slate-300">طائر/صوص</span>
                     </div>
                     <span className="text-[10px] text-slate-400 mt-1 block">
-                      بياض: {totalLayingHens} | نامي/لحم: {totalGrowerBirds} | صوص 1: {p1ChicksCount}
+                      بياض وتخصيب: {totalLayerFlock} ({totalLayingHens} أنثى + {totalBreedingMales} ذكر) | نامي/لحم: {totalGrowerBirds} | صوص 1: {p1ChicksCount}
                     </span>
                   </div>
                 </div>
@@ -990,11 +996,17 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
               {/* Three Feed Categories Grid */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
                 {/* 1. Starter Feed */}
-                <div className="p-5 rounded-3xl bg-amber-50/50 border border-amber-200/80 flex flex-col justify-between space-y-4 relative overflow-hidden">
+                <div className={`p-5 rounded-3xl border flex flex-col justify-between space-y-4 relative overflow-hidden transition-all ${
+                  starterStock?.isActive === false
+                    ? 'bg-slate-50 border-dashed border-slate-300 opacity-90'
+                    : 'bg-amber-50/50 border-amber-200/80'
+                }`}>
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2.5">
-                        <div className="w-10 h-10 rounded-2xl bg-amber-500 text-white flex items-center justify-center shadow-xs">
+                        <div className={`w-10 h-10 rounded-2xl text-white flex items-center justify-center shadow-xs ${
+                          starterStock?.isActive === false ? 'bg-slate-400' : 'bg-amber-500'
+                        }`}>
                           <Flame className="w-5 h-5" />
                         </div>
                         <div>
@@ -1002,8 +1014,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
                           <span className="text-[10px] font-bold text-amber-800">حضانات التدفئة (المرحلة 1)</span>
                         </div>
                       </div>
-                      <span className="text-[10px] font-black bg-amber-100 text-amber-900 px-2 py-0.5 rounded-full">
-                        عمر 1-21 يوم
+                      <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
+                        starterStock?.isActive === false
+                          ? 'bg-slate-200 text-slate-700'
+                          : 'bg-amber-100 text-amber-900'
+                      }`}>
+                        {starterStock?.isActive === false ? '⏸️ متوقف مؤقتاً' : 'عمر 1-21 يوم'}
                       </span>
                     </div>
 
@@ -1039,24 +1055,38 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
                       </div>
                       <div className="flex justify-between">
                         <span>الرصيد المتاح بالمخزن:</span>
-                        <b className={`font-mono ${starterAvailableBags <= 1 ? 'text-rose-600 font-black' : 'text-slate-900'}`}>
-                          {starterAvailableBags} كيس
+                        <b className={`font-mono ${
+                          starterStock?.isActive === false
+                            ? 'text-slate-500'
+                            : starterAvailableBags <= 1
+                            ? 'text-rose-600 font-black'
+                            : 'text-slate-900'
+                        }`}>
+                          {starterAvailableBags} كيس {starterStock?.isActive === false && '(متوقف)'}
                         </b>
                       </div>
                     </div>
                   </div>
 
                   <div className="pt-2 border-t border-amber-200/60 text-[10px] text-amber-900/80 bg-amber-100/50 p-2.5 rounded-xl">
-                    💡 يعتمد معدل التحضين التدريجي (6.5 إلى 16.5 جرام/صوص/يوم حسب الأسبوع).
+                    {starterStock?.isActive === false
+                      ? '⏸️ هذا الصنف معطل مؤقتاً في الدورة الحالية (لا يتطلب رصيداً مخزنياً).'
+                      : '💡 يعتمد معدل التحضين التدريجي (6.5 إلى 16.5 جرام/صوص/يوم حسب الأسبوع).'}
                   </div>
                 </div>
 
                 {/* 2. Grower Feed */}
-                <div className="p-5 rounded-3xl bg-teal-50/50 border border-teal-200/80 flex flex-col justify-between space-y-4 relative overflow-hidden">
+                <div className={`p-5 rounded-3xl border flex flex-col justify-between space-y-4 relative overflow-hidden transition-all ${
+                  growerStock?.isActive === false
+                    ? 'bg-slate-50 border-dashed border-slate-300 opacity-90'
+                    : 'bg-teal-50/50 border-teal-200/80'
+                }`}>
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2.5">
-                        <div className="w-10 h-10 rounded-2xl bg-teal-600 text-white flex items-center justify-center shadow-xs">
+                        <div className={`w-10 h-10 rounded-2xl text-white flex items-center justify-center shadow-xs ${
+                          growerStock?.isActive === false ? 'bg-slate-400' : 'bg-teal-600'
+                        }`}>
                           <Wind className="w-5 h-5" />
                         </div>
                         <div>
@@ -1064,8 +1094,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
                           <span className="text-[10px] font-bold text-teal-800">تحضين مرحلة 2 + تسمين</span>
                         </div>
                       </div>
-                      <span className="text-[10px] font-black bg-teal-100 text-teal-900 px-2 py-0.5 rounded-full">
-                        عمر 22-38 يوم
+                      <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
+                        growerStock?.isActive === false
+                          ? 'bg-slate-200 text-slate-700'
+                          : 'bg-teal-100 text-teal-900'
+                      }`}>
+                        {growerStock?.isActive === false ? '⏸️ متوقف مؤقتاً' : 'عمر 22-38 يوم'}
                       </span>
                     </div>
 
@@ -1101,33 +1135,51 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
                       </div>
                       <div className="flex justify-between">
                         <span>الرصيد المتاح بالمخزن:</span>
-                        <b className={`font-mono ${growerAvailableBags <= 1 ? 'text-rose-600 font-black' : 'text-slate-900'}`}>
-                          {growerAvailableBags} كيس
+                        <b className={`font-mono ${
+                          growerStock?.isActive === false
+                            ? 'text-slate-500'
+                            : growerAvailableBags <= 1
+                            ? 'text-rose-600 font-black'
+                            : 'text-slate-900'
+                        }`}>
+                          {growerAvailableBags} كيس {growerStock?.isActive === false && '(متوقف)'}
                         </b>
                       </div>
                     </div>
                   </div>
 
                   <div className="pt-2 border-t border-teal-200/60 text-[10px] text-teal-900/80 bg-teal-100/50 p-2.5 rounded-xl">
-                    💡 يغطي مرحلة الترييش والنمو السريع وطيور التسمين بمعدل 21-26 جم/طائر/يوم.
+                    {growerStock?.isActive === false
+                      ? '⏸️ هذا الصنف معطل مؤقتاً في الدورة الحالية (لا يتطلب رصيداً مخزنياً).'
+                      : '💡 يغطي مرحلة الترييش والنمو السريع وطيور التسمين بمعدل 21-26 جم/طائر/يوم.'}
                   </div>
                 </div>
 
                 {/* 3. Layer Feed */}
-                <div className="p-5 rounded-3xl bg-emerald-50/50 border border-emerald-200/80 flex flex-col justify-between space-y-4 relative overflow-hidden">
+                <div className={`p-5 rounded-3xl border flex flex-col justify-between space-y-4 relative overflow-hidden transition-all ${
+                  layerStock?.isActive === false
+                    ? 'bg-slate-50 border-dashed border-slate-300 opacity-90'
+                    : 'bg-emerald-50/50 border-emerald-200/80'
+                }`}>
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2.5">
-                        <div className="w-10 h-10 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shadow-xs">
+                        <div className={`w-10 h-10 rounded-2xl text-white flex items-center justify-center shadow-xs ${
+                          layerStock?.isActive === false ? 'bg-slate-400' : 'bg-emerald-600'
+                        }`}>
                           <Egg className="w-5 h-5" />
                         </div>
                         <div>
                           <h4 className="font-black text-slate-900 text-sm">علف بياض (20%)</h4>
-                          <span className="text-[10px] font-bold text-emerald-800">إناث السمان البياضة</span>
+                          <span className="text-[10px] font-bold text-emerald-800">إناث البياض + ذكور التخصيب</span>
                         </div>
                       </div>
-                      <span className="text-[10px] font-black bg-emerald-100 text-emerald-900 px-2 py-0.5 rounded-full">
-                        30 جم/طير/يوم
+                      <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
+                        layerStock?.isActive === false
+                          ? 'bg-slate-200 text-slate-700'
+                          : 'bg-emerald-100 text-emerald-900'
+                      }`}>
+                        {layerStock?.isActive === false ? '⏸️ متوقف مؤقتاً' : '30 جم/طير/يوم'}
                       </span>
                     </div>
 
@@ -1155,7 +1207,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
                     <div className="text-[11px] space-y-1.5 text-slate-600 px-1">
                       <div className="flex justify-between">
                         <span>القطيع المستفيد:</span>
-                        <b className="font-mono text-slate-900">{totalLayingHens} أنثى بياضة</b>
+                        <b className="font-mono text-slate-900">{totalLayerFlock} طائر ({totalLayingHens} أنثى + {totalBreedingMales} ذكر تخصيب)</b>
                       </div>
                       <div className="flex justify-between">
                         <span>سعر الكيس في المستودع:</span>
@@ -1163,15 +1215,23 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
                       </div>
                       <div className="flex justify-between">
                         <span>الرصيد المتاح بالمخزن:</span>
-                        <b className={`font-mono ${layerAvailableBags <= 1 ? 'text-rose-600 font-black' : 'text-slate-900'}`}>
-                          {layerAvailableBags} كيس
+                        <b className={`font-mono ${
+                          layerStock?.isActive === false
+                            ? 'text-slate-500'
+                            : layerAvailableBags <= 1
+                            ? 'text-rose-600 font-black'
+                            : 'text-slate-900'
+                        }`}>
+                          {layerAvailableBags} كيس {layerStock?.isActive === false && '(متوقف)'}
                         </b>
                       </div>
                     </div>
                   </div>
 
                   <div className="pt-2 border-t border-emerald-200/60 text-[10px] text-emerald-900/80 bg-emerald-100/50 p-2.5 rounded-xl">
-                    💡 معيار الإنتاج: 30 جرام لكل أنثى بياضة يومياً لضمان استقرار نسبة البيض ({generalLayingRate}%).
+                    {layerStock?.isActive === false
+                      ? '⏸️ هذا الصنف معطل مؤقتاً في الدورة الحالية (لا يتطلب رصيداً مخزنياً).'
+                      : `💡 معيار الإنتاج: 30 جرام لكل طائر (إناث البياض وذكور التخصيب) يومياً لضمان استقرار نسبة البيض (${generalLayingRate}%) والخصوبة.`}
                   </div>
                 </div>
               </div>

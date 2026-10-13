@@ -2322,6 +2322,14 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
               </div>
             )}
 
+            {/* Invoice Notes / Statement Banner */}
+            {selectedInvoice.notes && (
+              <div className="p-3 mb-4 rounded-2xl bg-amber-50/70 border border-amber-200 text-xs flex items-center gap-2">
+                <span className="font-bold text-amber-900">📝 بيان / ملاحظة:</span>
+                <span className="text-amber-950 font-semibold">{selectedInvoice.notes}</span>
+              </div>
+            )}
+
             {/* Customer & Status Summary */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-4 rounded-2xl bg-slate-50 border border-slate-200 mb-4 text-xs">
               <div>
