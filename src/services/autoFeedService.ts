@@ -195,10 +195,29 @@ export async function executeAutomatedDailyFeedDeduction(
           Math.floor((targetDateObj.getTime() - hatchDateObj.getTime()) / (1000 * 60 * 60 * 24)) + 1
         );
 
-        const { grams } = getChickDailyConsumptionGrams(ageDays);
+        // Check if custom feed schedule exists
+        const feedScheduleSetting = await db.settings.get('broodingFeedSchedule');
+        let grams = 25;
+        let effectiveFeedType: FeedType = batch.selectedFeedType || 'starter_24_27';
+
+        if (feedScheduleSetting?.value?.rates && Array.isArray(feedScheduleSetting.value.rates)) {
+          const currentWeek =
+            ageDays <= 7 ? 1 : ageDays <= 14 ? 2 : ageDays <= 21 ? 3 : ageDays <= 28 ? 4 : 5;
+          const rate = feedScheduleSetting.value.rates.find((r: any) => r.weekNumber === currentWeek);
+          if (rate) {
+            grams = rate.defaultGramsPerChickDay ?? grams;
+            if (rate.feedType) {
+              effectiveFeedType = rate.feedType;
+            }
+          }
+        } else {
+          const fallback = getChickDailyConsumptionGrams(ageDays);
+          grams = fallback.grams;
+        }
+
         const dailyKg = Math.round(((batch.currentChicksCount * grams) / 1000) * 100) / 100;
 
-        const feedStock = await db.feedStock.where('feedType').equals(batch.selectedFeedType).first();
+        const feedStock = await db.feedStock.where('feedType').equals(effectiveFeedType).first();
 
         if (feedStock && feedStock.totalKg >= dailyKg) {
           const bagWeight = feedStock.bagWeightKg || 50;
@@ -229,18 +248,19 @@ export async function executeAutomatedDailyFeedDeduction(
             targetType: 'room',
             targetId: batch.id,
             targetName: `دفعة تحضين (${batch.batchNumber}) - ${phaseLabel} (عمر ${ageDays} يوم)`,
-            feedType: batch.selectedFeedType,
+            feedType: effectiveFeedType,
             bagsUsed: dailyBags,
             kgUsed: dailyKg,
             costAmount: dailyCost,
             birdsCount: batch.currentChicksCount,
-            notes: `خصم آلي مجدول لاستهلاك صيصان التحضين (${batch.batchNumber}) بعمر ${ageDays} يوم بمعدل ${grams} جم/طير عن يوم ${targetDate}`,
+            notes: `خصم آلي مجدول لاستهلاك صيصان التحضين (${batch.batchNumber}) بعمر ${ageDays} يوم بمعدل ${grams} جم/طير (${feedStock.name}) عن يوم ${targetDate}`,
             recordedBy,
             createdAt: new Date().toISOString(),
           });
 
           // Update batch tracking
           await db.broodingBatches.update(batch.id, {
+            selectedFeedType: effectiveFeedType,
             lastFeedDeductionDate: targetDate,
             totalFeedConsumedKg: (batch.totalFeedConsumedKg || 0) + dailyKg,
             updatedAt: new Date().toISOString(),

@@ -39,6 +39,15 @@ import {
   Flame,
   Wind,
   Baby,
+  Wallet,
+  CreditCard,
+  ArrowDownLeft,
+  Eye,
+  ShieldCheck,
+  Clock,
+  Users,
+  Smartphone,
+  Banknote,
 } from 'lucide-react';
 
 interface DashboardViewProps {
@@ -46,7 +55,7 @@ interface DashboardViewProps {
 }
 
 export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
-  const { isManager, farmSettings } = useAuth();
+  const { isManager, farmSettings, userName } = useAuth();
 
   const today = new Date();
   const todayStr = today.toISOString().split('T')[0];
@@ -61,6 +70,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   const [showFeedAnalyticsModal, setShowFeedAnalyticsModal] = useState(false);
   const [feedTimeframe, setFeedTimeframe] = useState<'today' | 'month'>('today');
 
+  // Quick Cash Drawer Details Modal State
+  const [showCashDrawerModal, setShowCashDrawerModal] = useState(false);
+
   // Live queries from IndexedDB
   const batteries = useLiveQuery(() => db.batteries.toArray(), []);
   const tiers = useLiveQuery(() => db.tiers.toArray(), []);
@@ -69,6 +81,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   const incubations = useLiveQuery(() => db.incubationBatches.toArray(), []);
   const invoices = useLiveQuery(() => db.invoices.toArray(), []);
   const expenses = useLiveQuery(() => db.expenses.toArray(), []);
+  const purchases = useLiveQuery(() => db.purchases.toArray(), []);
+  const vouchers = useLiveQuery(() => db.receiptVouchers.toArray(), []);
+  const cashRegisters = useLiveQuery(() => db.cashRegisters.reverse().sortBy('date'), []);
+  const detailedMortality = useLiveQuery(() => db.detailedMortality.toArray(), []);
+  const eggBatches = useLiveQuery(() => db.eggBatches.toArray(), []);
+  const customers = useLiveQuery(() => db.customers.toArray(), []);
   const feedStocks = useLiveQuery(() => db.feedStock.toArray(), []);
   const feedConsumptions = useLiveQuery(() => db.feedConsumption.toArray(), []);
   const broodingBatches = useLiveQuery(() => db.broodingBatches.toArray(), []);
@@ -97,9 +115,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
     layerRooms.reduce((acc, r) => acc + (r.malesCount || 0), 0) || 0;
 
   const totalFlockBirds = totalBatteryBirds + totalRoomBirds;
-  const totalLayingHens = totalBatteryFemales + totalRoomFemales; // الإناث البياضة (لحساب نسبة وضع البيض)
-  const totalBreedingMales = totalBatteryMales + totalRoomMales; // ذكور التخصيب المختلطة
-  const totalLayerFlock = totalLayingHens + totalBreedingMales; // إجمالي قطيع البياض والتخصيب المستهلك لعلف البياض
+  const totalLayingHens = totalBatteryFemales + totalRoomFemales; // الإناث البياضة
+  const totalBreedingMales = totalBatteryMales + totalRoomMales; // ذكور التخصيب
+  const totalLayerFlock = totalLayingHens + totalBreedingMales; // إجمالي قطيع البياض والتخصيب
 
   // Today's eggs & packaging
   const todayEggLogs = eggLogs?.filter((l) => l.collectionDate === todayStr) || [];
@@ -139,14 +157,93 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   const generalLayingRate =
     totalLayingHens > 0 ? Math.round((todayEggsTotal / totalLayingHens) * 100) : 0;
 
-  // Financials today (Manager only)
+  // ==========================================
+  // REAL-TIME CASH REGISTER & TREASURY FINANCE
+  // حسابات مالية الصندوق والخزينة اللحظية
+  // ==========================================
   const todayInvoices = invoices?.filter((inv) => inv.date === todayStr) || [];
   const todayRevenue = todayInvoices.reduce((acc, inv) => acc + inv.totalAmount, 0);
-  const todayCashCollected = todayInvoices.reduce((acc, inv) => acc + inv.paidAmount, 0);
 
-  // Active incubations
+  // 1. Cash Inflow
+  const todayCashSales = todayInvoices
+    .filter((inv) => inv.paymentMethod === 'cash')
+    .reduce((acc, inv) => acc + inv.paidAmount, 0);
+
+  // 2. Electronic Wallets Inflow (الكريمي، جيب، جوالي)
+  const todayKuraimiSales = todayInvoices
+    .filter((inv) => inv.paymentMethod === 'kuraimi')
+    .reduce((acc, inv) => acc + inv.paidAmount, 0);
+
+  const todayJeebSales = todayInvoices
+    .filter((inv) => inv.paymentMethod === 'jeeb')
+    .reduce((acc, inv) => acc + inv.paidAmount, 0);
+
+  const todayJawaliSales = todayInvoices
+    .filter((inv) => inv.paymentMethod === 'jawali')
+    .reduce((acc, inv) => acc + inv.paidAmount, 0);
+
+  const todayEWalletsTotal = todayKuraimiSales + todayJeebSales + todayJawaliSales;
+
+  // 3. Customer Debt Cash Payments (سندات القبض النقدية)
+  const todayCashVouchers =
+    vouchers
+      ?.filter((v) => v.date === todayStr && v.paymentType === 'cash')
+      .reduce((acc, v) => acc + v.amount, 0) || 0;
+
+  // 4. Cash Expenses Deducted from Drawer (المصروفات النقدية المسحوبة من الصندوق)
+  const todayCashExpenses =
+    (expenses?.filter((e) => e.date === todayStr && e.paidFrom === 'cash_box').reduce((acc, e) => acc + e.amount, 0) || 0) +
+    (purchases?.filter((p) => p.date === todayStr && p.paidFrom === 'cash_box').reduce((acc, p) => acc + p.totalAmount, 0) || 0);
+
+  // 5. Opening Cash Balance from Yesterday
+  const previousRegisters = cashRegisters?.filter((r) => r.date < todayStr) || [];
+  const lastYesterdayRegister = previousRegisters.length > 0 ? previousRegisters[0] : null;
+  const autoOpeningBalance = lastYesterdayRegister ? lastYesterdayRegister.actualClosingBalance : 1500;
+
+  // 6. Today's Register & Status
+  const todayRegister = cashRegisters?.find((r) => r.date === todayStr);
+  const openingBalance = todayRegister ? todayRegister.openingBalance : autoOpeningBalance;
+
+  // 7. CURRENT PHYSICAL CASH ESTIMATED IN THE DRAWER RIGHT NOW:
+  // نقدية الصندوق الفعلية المتوفرة بالدرج حالياً
+  const currentCashInDrawer = openingBalance + todayCashSales + todayCashVouchers - todayCashExpenses;
+
+  // Cash status
+  const isShiftClosedToday = !!todayRegister;
+  const shiftStatusLabel = todayRegister
+    ? todayRegister.status === 'balanced'
+      ? 'تم الجرد ومطابق'
+      : todayRegister.status === 'surplus'
+      ? 'تم الجرد (فائض)'
+      : 'تم الجرد (عجز)'
+    : 'الدرج نشط';
+
+  // ==========================================
+  // OPERATIONAL RADAR: HEALTH, STOCK, INCUBATION
+  // رادار العمليات الميدانية اليومية
+  // ==========================================
+  // 1. Mortality today
+  const todayMortalityLogs = detailedMortality?.filter((m) => m.date === todayStr) || [];
+  const todayMortalityCount = todayMortalityLogs.reduce((acc, m) => acc + m.quantity, 0);
+  const mortalityPercent = totalFlockBirds > 0 ? ((todayMortalityCount / totalFlockBirds) * 100).toFixed(1) : '0';
+  const isMortalityNormal = todayMortalityCount <= 3;
+
+  // 2. Warehouse Stock (FIFO)
+  const availableBatches = eggBatches?.filter((b) => b.status === 'available' && b.cagesCount > 0) || [];
+  const totalWarehouseCages = availableBatches.reduce((acc, b) => acc + b.cagesCount, 0);
+  const totalWarehouseValue = availableBatches.reduce((acc, b) => acc + b.cagesCount * b.pricePerCage, 0);
+
+  // 3. Customer Outstanding Receivables (ديون العملاء الإجمالية)
+  const totalCustomerDebt = customers?.reduce((acc, c) => acc + (c.currentDebt || 0), 0) || 0;
+
+  // 4. Incubation Hatching Near (اليوم 14-18)
   const activeIncubationsList =
     incubations?.filter((b) => b.status === 'incubating' || b.status === 'candled') || [];
+
+  const nearHatchBatches = activeIncubationsList.filter((b) => {
+    const days = Math.floor((today.getTime() - new Date(b.startDate).getTime()) / (1000 * 60 * 60 * 24));
+    return days >= 14 && days <= 18;
+  });
 
   // --- Feed Consumption & Financial Analytics Calculations ---
   const activeRates: BroodingWeeklyRate[] = useMemo(() => {
@@ -183,52 +280,77 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   const layerCostPerKg = layerCostPerBag / layerBagWeight;
   const layerAvailableBags = layerStock?.bagsCount || 0;
 
-  // 1. Starter Flock & Rates (Phase 1 brooding: 1-21 days)
-  const phase1Brood = broodingBatches?.filter((b) => {
-    if (b.status !== 'active') return false;
-    const age = Math.max(1, Math.floor((today.getTime() - new Date(b.hatchDate).getTime()) / (1000 * 60 * 60 * 24)) + 1);
-    return age <= 21;
-  }) || [];
+  // Phase 1 Starter
+  const phase1Brood =
+    broodingBatches?.filter((b) => {
+      if (b.status !== 'active') return false;
+      const age = Math.max(
+        1,
+        Math.floor((today.getTime() - new Date(b.hatchDate).getTime()) / (1000 * 60 * 60 * 24)) + 1
+      );
+      return age <= 21;
+    }) || [];
   const p1ChicksCount = phase1Brood.reduce((acc, b) => acc + b.currentChicksCount, 0);
 
   const p1EstimatedDailyKg = phase1Brood.reduce((acc, b) => {
-    const age = Math.max(1, Math.floor((today.getTime() - new Date(b.hatchDate).getTime()) / (1000 * 60 * 60 * 24)) + 1);
+    const age = Math.max(
+      1,
+      Math.floor((today.getTime() - new Date(b.hatchDate).getTime()) / (1000 * 60 * 60 * 24)) + 1
+    );
     const g = getGramsPerChickForAge(age, activeRates);
     return acc + (b.currentChicksCount * g) / 1000;
   }, 0);
   const p1EstimatedDailyCost = p1EstimatedDailyKg * starterCostPerKg;
   const p1EstimatedDailyBags = p1EstimatedDailyKg / starterBagWeight;
 
-  const starterTodayLogs = feedConsumptions?.filter((c) => c.date === todayStr && c.feedType === 'starter_24_27') || [];
+  const starterTodayLogs =
+    feedConsumptions?.filter((c) => c.date === todayStr && c.feedType === 'starter_24_27') || [];
   const starterKgLoggedToday = starterTodayLogs.reduce((a, c) => a + c.kgUsed, 0);
-  const starterCostLoggedToday = starterTodayLogs.reduce((a, c) => a + (c.costAmount || c.kgUsed * starterCostPerKg), 0);
+  const starterCostLoggedToday = starterTodayLogs.reduce(
+    (a, c) => a + (c.costAmount || c.kgUsed * starterCostPerKg),
+    0
+  );
   const starterBagsLoggedToday = starterTodayLogs.reduce((a, c) => a + c.bagsUsed, 0);
 
   const p1KgToday = starterKgLoggedToday > 0 ? starterKgLoggedToday : Math.round(p1EstimatedDailyKg * 10) / 10;
   const p1CostToday = starterCostLoggedToday > 0 ? starterCostLoggedToday : Math.round(p1EstimatedDailyCost);
-  const p1BagsToday = starterBagsLoggedToday > 0 ? starterBagsLoggedToday : Math.round(p1EstimatedDailyBags * 100) / 100;
+  const p1BagsToday =
+    starterBagsLoggedToday > 0 ? starterBagsLoggedToday : Math.round(p1EstimatedDailyBags * 100) / 100;
 
-  const starterMonthLogs = feedConsumptions?.filter((c) => c.date.startsWith(currentMonthStr) && c.feedType === 'starter_24_27') || [];
-  const p1KgMonth = starterMonthLogs.length > 0
-    ? starterMonthLogs.reduce((a, c) => a + c.kgUsed, 0)
-    : Math.round(p1EstimatedDailyKg * currentDayOfMonth * 10) / 10;
-  const p1CostMonth = starterMonthLogs.length > 0
-    ? starterMonthLogs.reduce((a, c) => a + (c.costAmount || c.kgUsed * starterCostPerKg), 0)
-    : Math.round(p1EstimatedDailyCost * currentDayOfMonth);
+  const starterMonthLogs =
+    feedConsumptions?.filter(
+      (c) => c.date.startsWith(currentMonthStr) && c.feedType === 'starter_24_27'
+    ) || [];
+  const p1KgMonth =
+    starterMonthLogs.length > 0
+      ? starterMonthLogs.reduce((a, c) => a + c.kgUsed, 0)
+      : Math.round(p1EstimatedDailyKg * currentDayOfMonth * 10) / 10;
+  const p1CostMonth =
+    starterMonthLogs.length > 0
+      ? starterMonthLogs.reduce((a, c) => a + (c.costAmount || c.kgUsed * starterCostPerKg), 0)
+      : Math.round(p1EstimatedDailyCost * currentDayOfMonth);
   const p1BagsMonth = Math.round((p1KgMonth / starterBagWeight) * 100) / 100;
 
-  // 2. Grower Flock & Rates (Phase 2 brooding 22-38 days + Fattening meat birds)
-  const phase2Brood = broodingBatches?.filter((b) => {
-    if (b.status !== 'active') return false;
-    const age = Math.max(1, Math.floor((today.getTime() - new Date(b.hatchDate).getTime()) / (1000 * 60 * 60 * 24)) + 1);
-    return age > 21;
-  }) || [];
+  // Phase 2 Grower
+  const phase2Brood =
+    broodingBatches?.filter((b) => {
+      if (b.status !== 'active') return false;
+      const age = Math.max(
+        1,
+        Math.floor((today.getTime() - new Date(b.hatchDate).getTime()) / (1000 * 60 * 60 * 24)) + 1
+      );
+      return age > 21;
+    }) || [];
   const p2ChicksCount = phase2Brood.reduce((acc, b) => acc + b.currentChicksCount, 0);
-  const fatteningBirdsCount = rooms?.filter((r) => r.purpose === 'fattening').reduce((acc, r) => acc + r.malesCount + r.femalesCount, 0) || 0;
+  const fatteningBirdsCount =
+    rooms?.filter((r) => r.purpose === 'fattening').reduce((acc, r) => acc + r.malesCount + r.femalesCount, 0) || 0;
   const totalGrowerBirds = p2ChicksCount + fatteningBirdsCount;
 
   const p2BroodKg = phase2Brood.reduce((acc, b) => {
-    const age = Math.max(1, Math.floor((today.getTime() - new Date(b.hatchDate).getTime()) / (1000 * 60 * 60 * 24)) + 1);
+    const age = Math.max(
+      1,
+      Math.floor((today.getTime() - new Date(b.hatchDate).getTime()) / (1000 * 60 * 60 * 24)) + 1
+    );
     const g = getGramsPerChickForAge(age, activeRates);
     return acc + (b.currentChicksCount * g) / 1000;
   }, 0);
@@ -237,49 +359,69 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   const growerEstimatedDailyCost = growerEstimatedDailyKg * growerCostPerKg;
   const growerEstimatedDailyBags = growerEstimatedDailyKg / growerBagWeight;
 
-  const growerTodayLogs = feedConsumptions?.filter((c) => c.date === todayStr && c.feedType === 'grower_fattening') || [];
+  const growerTodayLogs =
+    feedConsumptions?.filter((c) => c.date === todayStr && c.feedType === 'grower_fattening') || [];
   const growerKgLoggedToday = growerTodayLogs.reduce((a, c) => a + c.kgUsed, 0);
-  const growerCostLoggedToday = growerTodayLogs.reduce((a, c) => a + (c.costAmount || c.kgUsed * growerCostPerKg), 0);
+  const growerCostLoggedToday = growerTodayLogs.reduce(
+    (a, c) => a + (c.costAmount || c.kgUsed * growerCostPerKg),
+    0
+  );
   const growerBagsLoggedToday = growerTodayLogs.reduce((a, c) => a + c.bagsUsed, 0);
 
   const growerKgToday = growerKgLoggedToday > 0 ? growerKgLoggedToday : Math.round(growerEstimatedDailyKg * 10) / 10;
   const growerCostToday = growerCostLoggedToday > 0 ? growerCostLoggedToday : Math.round(growerEstimatedDailyCost);
-  const growerBagsToday = growerBagsLoggedToday > 0 ? growerBagsLoggedToday : Math.round(growerEstimatedDailyBags * 100) / 100;
+  const growerBagsToday =
+    growerBagsLoggedToday > 0 ? growerBagsLoggedToday : Math.round(growerEstimatedDailyBags * 100) / 100;
 
-  const growerMonthLogs = feedConsumptions?.filter((c) => c.date.startsWith(currentMonthStr) && c.feedType === 'grower_fattening') || [];
-  const growerKgMonth = growerMonthLogs.length > 0
-    ? growerMonthLogs.reduce((a, c) => a + c.kgUsed, 0)
-    : Math.round(growerEstimatedDailyKg * currentDayOfMonth * 10) / 10;
-  const growerCostMonth = growerMonthLogs.length > 0
-    ? growerMonthLogs.reduce((a, c) => a + (c.costAmount || c.kgUsed * growerCostPerKg), 0)
-    : Math.round(growerEstimatedDailyCost * currentDayOfMonth);
+  const growerMonthLogs =
+    feedConsumptions?.filter(
+      (c) => c.date.startsWith(currentMonthStr) && c.feedType === 'grower_fattening'
+    ) || [];
+  const growerKgMonth =
+    growerMonthLogs.length > 0
+      ? growerMonthLogs.reduce((a, c) => a + c.kgUsed, 0)
+      : Math.round(growerEstimatedDailyKg * currentDayOfMonth * 10) / 10;
+  const growerCostMonth =
+    growerMonthLogs.length > 0
+      ? growerMonthLogs.reduce((a, c) => a + (c.costAmount || c.kgUsed * growerCostPerKg), 0)
+      : Math.round(growerEstimatedDailyCost * currentDayOfMonth);
   const growerBagsMonth = Math.round((growerKgMonth / growerBagWeight) * 100) / 100;
 
-  // 3. Layer Flock & Rates (Laying flock standard 30g/day per bird: females + breeding males)
+  // Layer Feed
   const isLayerFeedActive = layerStock?.isActive !== false;
   const layerEstimatedDailyKg = isLayerFeedActive ? (totalLayerFlock * 30) / 1000 : 0;
   const layerEstimatedDailyCost = layerEstimatedDailyKg * layerCostPerKg;
   const layerEstimatedDailyBags = layerEstimatedDailyKg / layerBagWeight;
 
-  const layerTodayLogs = feedConsumptions?.filter((c) => c.date === todayStr && c.feedType === 'layer_production') || [];
+  const layerTodayLogs =
+    feedConsumptions?.filter((c) => c.date === todayStr && c.feedType === 'layer_production') || [];
   const layerKgLoggedToday = layerTodayLogs.reduce((a, c) => a + c.kgUsed, 0);
-  const layerCostLoggedToday = layerTodayLogs.reduce((a, c) => a + (c.costAmount || c.kgUsed * layerCostPerKg), 0);
+  const layerCostLoggedToday = layerTodayLogs.reduce(
+    (a, c) => a + (c.costAmount || c.kgUsed * layerCostPerKg),
+    0
+  );
   const layerBagsLoggedToday = layerTodayLogs.reduce((a, c) => a + c.bagsUsed, 0);
 
   const layerKgToday = layerKgLoggedToday > 0 ? layerKgLoggedToday : Math.round(layerEstimatedDailyKg * 10) / 10;
   const layerCostToday = layerCostLoggedToday > 0 ? layerCostLoggedToday : Math.round(layerEstimatedDailyCost);
-  const layerBagsToday = layerBagsLoggedToday > 0 ? layerBagsLoggedToday : Math.round(layerEstimatedDailyBags * 100) / 100;
+  const layerBagsToday =
+    layerBagsLoggedToday > 0 ? layerBagsLoggedToday : Math.round(layerEstimatedDailyBags * 100) / 100;
 
-  const layerMonthLogs = feedConsumptions?.filter((c) => c.date.startsWith(currentMonthStr) && c.feedType === 'layer_production') || [];
-  const layerKgMonth = layerMonthLogs.length > 0
-    ? layerMonthLogs.reduce((a, c) => a + c.kgUsed, 0)
-    : Math.round(layerEstimatedDailyKg * currentDayOfMonth * 10) / 10;
-  const layerCostMonth = layerMonthLogs.length > 0
-    ? layerMonthLogs.reduce((a, c) => a + (c.costAmount || c.kgUsed * layerCostPerKg), 0)
-    : Math.round(layerEstimatedDailyCost * currentDayOfMonth);
+  const layerMonthLogs =
+    feedConsumptions?.filter(
+      (c) => c.date.startsWith(currentMonthStr) && c.feedType === 'layer_production'
+    ) || [];
+  const layerKgMonth =
+    layerMonthLogs.length > 0
+      ? layerMonthLogs.reduce((a, c) => a + c.kgUsed, 0)
+      : Math.round(layerEstimatedDailyKg * currentDayOfMonth * 10) / 10;
+  const layerCostMonth =
+    layerMonthLogs.length > 0
+      ? layerMonthLogs.reduce((a, c) => a + (c.costAmount || c.kgUsed * layerCostPerKg), 0)
+      : Math.round(layerEstimatedDailyCost * currentDayOfMonth);
   const layerBagsMonth = Math.round((layerKgMonth / layerBagWeight) * 100) / 100;
 
-  // Overall Totals
+  // Overall Feed Totals
   const totalFeedKgToday = Math.round((p1KgToday + growerKgToday + layerKgToday) * 10) / 10;
   const totalFeedCostToday = p1CostToday + growerCostToday + layerCostToday;
   const totalFeedBagsToday = Math.round((p1BagsToday + growerBagsToday + layerBagsToday) * 100) / 100;
@@ -288,29 +430,39 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   const totalFeedCostMonth = p1CostMonth + growerCostMonth + layerCostMonth;
   const totalFeedBagsMonth = Math.round((p1BagsMonth + growerBagsMonth + layerBagsMonth) * 100) / 100;
 
-  // Financial Returns Comparison (العائد مقابل تكلفة الأعلاف)
+  // Feed Stock Safety Days
+  const totalAvailableFeedBags = (starterAvailableBags || 0) + (growerAvailableBags || 0) + (layerAvailableBags || 0);
+  const totalAvailableFeedKg = totalAvailableFeedBags * 50;
+  const feedSecurityDays = totalFeedKgToday > 0 ? Math.floor(totalAvailableFeedKg / totalFeedKgToday) : 0;
+  const isFeedLow = (layerStock && layerAvailableBags <= 2) || (starterStock?.isActive && starterAvailableBags <= 1);
+
+  // Financial Returns Comparison
   const defaultTrayPrice = farmSettings.defaultTrayPrice || 900;
   const estimatedEggRevenueToday = Math.round((todayNetEggs / 30) * defaultTrayPrice);
   const recordedSalesToday = todayRevenue;
   const totalDailyEstimatedGrossRevenue =
-    estimatedEggRevenueToday + (recordedSalesToday > estimatedEggRevenueToday ? recordedSalesToday - estimatedEggRevenueToday : 0);
+    estimatedEggRevenueToday +
+    (recordedSalesToday > estimatedEggRevenueToday ? recordedSalesToday - estimatedEggRevenueToday : 0);
   const dailyFeedMargin = totalDailyEstimatedGrossRevenue - totalFeedCostToday;
-  const feedCostRatioPct = totalDailyEstimatedGrossRevenue > 0
-    ? Math.round((totalFeedCostToday / totalDailyEstimatedGrossRevenue) * 100)
-    : 0;
+  const feedCostRatioPct =
+    totalDailyEstimatedGrossRevenue > 0
+      ? Math.round((totalFeedCostToday / totalDailyEstimatedGrossRevenue) * 100)
+      : 0;
 
   // Monthly returns for feed comparison
   const monthInvoices = invoices?.filter((inv) => inv.date.startsWith(currentMonthStr)) || [];
   const monthRevenue = monthInvoices.reduce((acc, inv) => acc + inv.totalAmount, 0);
   const monthEggRevenue = Math.round(estimatedEggRevenueToday * currentDayOfMonth);
-  const totalMonthEstimatedGrossRevenue = monthEggRevenue + (monthRevenue > monthEggRevenue ? (monthRevenue - monthEggRevenue) : 0);
+  const totalMonthEstimatedGrossRevenue =
+    monthEggRevenue + (monthRevenue > monthEggRevenue ? monthRevenue - monthEggRevenue : 0);
   const monthFeedMargin = totalMonthEstimatedGrossRevenue - totalFeedCostMonth;
-  const monthFeedCostRatioPct = totalMonthEstimatedGrossRevenue > 0
-    ? Math.round((totalFeedCostMonth / totalMonthEstimatedGrossRevenue) * 100)
-    : 0;
+  const monthFeedCostRatioPct =
+    totalMonthEstimatedGrossRevenue > 0
+      ? Math.round((totalFeedCostMonth / totalMonthEstimatedGrossRevenue) * 100)
+      : 0;
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6 animate-fadeIn">
+    <div className="p-6 max-w-7xl mx-auto space-y-6 animate-fadeIn font-almarai text-right">
       {/* Bio-security Alert Banner if active */}
       {activeWithdrawals && activeWithdrawals.length > 0 && (
         <div className="p-4 rounded-3xl bg-amber-500/10 border border-amber-300 text-amber-950 flex items-center justify-between gap-4 shadow-sm">
@@ -330,7 +482,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
           </div>
           <button
             onClick={() => onNavigate('health_feed')}
-            className="px-3.5 py-2 rounded-2xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold shrink-0 transition-colors"
+            className="px-3.5 py-2 rounded-2xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold shrink-0 transition-colors cursor-pointer"
           >
             عرض جدول الأدوية
           </button>
@@ -358,21 +510,21 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
         <div className="flex flex-wrap gap-2">
           <button
             onClick={() => onNavigate('egg_production')}
-            className="px-4 py-2.5 rounded-2xl bg-white text-emerald-800 hover:bg-emerald-50 text-xs font-extrabold flex items-center gap-2 shadow-sm transition-all"
+            className="px-4 py-2.5 rounded-2xl bg-white text-emerald-800 hover:bg-emerald-50 text-xs font-extrabold flex items-center gap-2 shadow-sm transition-all cursor-pointer"
           >
             <Egg className="w-4 h-4 text-emerald-600" />
             <span>تسجيل جمعة بيض وفرز</span>
           </button>
           <button
             onClick={() => onNavigate('equipment')}
-            className="px-4 py-2.5 rounded-2xl bg-sky-700/80 hover:bg-sky-700 text-white text-xs font-bold flex items-center gap-2 transition-all border border-sky-400/40"
+            className="px-4 py-2.5 rounded-2xl bg-sky-700/80 hover:bg-sky-700 text-white text-xs font-bold flex items-center gap-2 transition-all border border-sky-400/40 cursor-pointer"
           >
             <Fan className="w-4 h-4" />
             <span>السجل البيئي والمعدات</span>
           </button>
           <button
             onClick={() => onNavigate('mortality')}
-            className="px-4 py-2.5 rounded-2xl bg-rose-700/80 hover:bg-rose-700 text-white text-xs font-bold flex items-center gap-2 transition-all border border-rose-400/40"
+            className="px-4 py-2.5 rounded-2xl bg-rose-700/80 hover:bg-rose-700 text-white text-xs font-bold flex items-center gap-2 transition-all border border-rose-400/40 cursor-pointer"
           >
             <Skull className="w-4 h-4" />
             <span>سجل النفوق التفصيلي</span>
@@ -381,20 +533,116 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
             <>
               <button
                 onClick={() => onNavigate('products')}
-                className="px-4 py-2.5 rounded-2xl bg-teal-700/80 hover:bg-teal-700 text-white text-xs font-bold flex items-center gap-2 transition-all border border-teal-400/40"
+                className="px-4 py-2.5 rounded-2xl bg-teal-700/80 hover:bg-teal-700 text-white text-xs font-bold flex items-center gap-2 transition-all border border-teal-400/40 cursor-pointer"
               >
                 <Package className="w-4 h-4" />
                 <span>إدارة المنتجات والأسعار</span>
               </button>
               <button
                 onClick={() => onNavigate('cash_register')}
-                className="px-4 py-2.5 rounded-2xl bg-amber-500 hover:bg-amber-400 text-white text-xs font-extrabold flex items-center gap-2 shadow-sm transition-all"
+                className="px-4 py-2.5 rounded-2xl bg-amber-500 hover:bg-amber-400 text-white text-xs font-extrabold flex items-center gap-2 shadow-sm transition-all cursor-pointer"
               >
                 <Coins className="w-4 h-4" />
                 <span>مطابقة الصندوق والوردية</span>
               </button>
             </>
           )}
+        </div>
+      </div>
+
+      {/* ============================================================== */}
+      {/* 🚀 EXECUTIVE OPERATIONAL RADAR: 4 CRITICAL LIVE METRICS         */}
+      {/* رادار العمليات الميدانية والإنذار المبكر (النافق، العلف، الفقس، المخزن) */}
+      {/* ============================================================== */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {/* Radar 1: Mortality Radar */}
+        <div
+          onClick={() => onNavigate('mortality')}
+          className="p-3.5 rounded-2xl bg-white border border-slate-200/90 shadow-xs hover:border-rose-300 transition-all cursor-pointer flex items-center gap-3 group"
+        >
+          <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+            isMortalityNormal ? 'bg-slate-100 text-slate-700' : 'bg-rose-100 text-rose-700 animate-pulse'
+          }`}>
+            <Skull className="w-4 h-4" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <span className="text-[10px] font-bold text-slate-500 block">النافق اليومي المسجل</span>
+            <div className="flex items-center gap-1.5 font-mono">
+              <span className={`text-base font-black ${isMortalityNormal ? 'text-slate-900' : 'text-rose-700'}`}>
+                {todayMortalityCount} طائر
+              </span>
+              <span className={`text-[9px] px-1.5 py-0.2 rounded-full font-bold ${
+                isMortalityNormal ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
+              }`}>
+                {isMortalityNormal ? 'طبيعي' : 'مرتفع'}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Radar 2: Feed Security Radar */}
+        <div
+          onClick={() => setShowFeedAnalyticsModal(true)}
+          className="p-3.5 rounded-2xl bg-white border border-slate-200/90 shadow-xs hover:border-amber-300 transition-all cursor-pointer flex items-center gap-3 group"
+        >
+          <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+            isFeedLow ? 'bg-amber-100 text-amber-700 animate-pulse' : 'bg-emerald-50 text-emerald-700'
+          }`}>
+            <Wheat className="w-4 h-4" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <span className="text-[10px] font-bold text-slate-500 block">أمان مخزون الأعلاف</span>
+            <div className="flex items-center gap-1.5 font-mono">
+              <span className="text-base font-black text-slate-900">
+                يكفي {feedSecurityDays} يوماً
+              </span>
+              <span className="text-[10px] text-slate-400">({totalAvailableFeedBags} كيس)</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Radar 3: Warehouse Stock (FIFO) */}
+        <div
+          onClick={() => onNavigate('egg_inventory')}
+          className="p-3.5 rounded-2xl bg-white border border-slate-200/90 shadow-xs hover:border-sky-300 transition-all cursor-pointer flex items-center gap-3 group"
+        >
+          <div className="w-9 h-9 rounded-xl bg-sky-50 text-sky-700 flex items-center justify-center shrink-0">
+            <Warehouse className="w-4 h-4" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <span className="text-[10px] font-bold text-slate-500 block">جاهز بالمخزن (FIFO)</span>
+            <div className="flex items-center gap-1.5 font-mono">
+              <span className="text-base font-black text-sky-900">
+                {totalWarehouseCages} قفص
+              </span>
+              <span className="text-[10px] text-slate-500">
+                ({totalWarehouseValue.toLocaleString('ar-SA')} ر.ي)
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Radar 4: Incubation Status */}
+        <div
+          onClick={() => onNavigate('incubation')}
+          className="p-3.5 rounded-2xl bg-white border border-slate-200/90 shadow-xs hover:border-purple-300 transition-all cursor-pointer flex items-center gap-3 group"
+        >
+          <div className="w-9 h-9 rounded-xl bg-purple-50 text-purple-700 flex items-center justify-center shrink-0">
+            <Baby className="w-4 h-4" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <span className="text-[10px] font-bold text-slate-500 block">حالة التحضين والفقاسات</span>
+            <div className="flex items-center gap-1 font-mono">
+              <span className="text-base font-black text-purple-950">
+                {activeIncubationsList.length} دفعات
+              </span>
+              {nearHatchBatches.length > 0 && (
+                <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-amber-100 text-amber-900 font-bold font-almarai">
+                  {nearHatchBatches.length} فقس قريب
+                </span>
+              )}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -492,7 +740,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
             <button
               type="button"
               onClick={() => setShowFeedAnalyticsModal(true)}
-              className="text-[11px] font-bold text-amber-700 bg-amber-50 hover:bg-amber-100 px-2 py-0.5 rounded-lg border border-amber-200/60 flex items-center gap-1 transition-colors"
+              className="text-[11px] font-bold text-amber-700 bg-amber-50 hover:bg-amber-100 px-2 py-0.5 rounded-lg border border-amber-200/60 flex items-center gap-1 transition-colors cursor-pointer"
               title="انقر لفتح تفاصيل استهلاك وتكاليف الأعلاف"
             >
               <Utensils className="w-3 h-3 text-amber-600" />
@@ -505,28 +753,72 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
           </div>
         </div>
 
-        {/* Card 4: Daily Revenue / Cash (Manager Only) */}
+        {/* ============================================================== */}
+        {/* CARD 4: LIVE CASH BOX & TREASURY FINANCE (THE REQUESTED WIDGET) */}
+        {/* أيقونة وبطاقة مالية الصندوق والخزينة النقدية الذكية */}
+        {/* ============================================================== */}
         {isManager ? (
-          <div className="p-5 rounded-3xl glass-card relative overflow-hidden">
+          <div className="p-5 rounded-3xl glass-card relative overflow-hidden border-2 border-amber-300/80 bg-gradient-to-br from-amber-50/40 via-white to-amber-50/20 shadow-sm">
+            {/* Top row with Treasury Icon and Live Shift Badge */}
             <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-bold text-slate-500">مبيعات اليوم النقدية</span>
-              <div className="w-10 h-10 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center">
-                <DollarSign className="w-5 h-5" />
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs font-bold text-slate-700">مالية الصندوق والدرج</span>
+                {/* Live shift status indicator */}
+                <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold flex items-center gap-1 ${
+                  isShiftClosedToday
+                    ? 'bg-slate-200 text-slate-700'
+                    : 'bg-emerald-100 text-emerald-800 animate-pulse'
+                }`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${isShiftClosedToday ? 'bg-slate-500' : 'bg-emerald-500'}`} />
+                  <span>{shiftStatusLabel}</span>
+                </span>
+              </div>
+
+              {/* Glowing Treasury Icon Button */}
+              <div
+                onClick={() => setShowCashDrawerModal(true)}
+                className="w-10 h-10 rounded-2xl bg-gradient-to-br from-amber-400 to-amber-500 text-white flex items-center justify-center shadow-md shadow-amber-500/25 cursor-pointer hover:scale-105 active:scale-95 transition-all"
+                title="انقر لفتح كشف حركة الصندوق النقدية"
+              >
+                <Wallet className="w-5 h-5 stroke-[2.5]" />
               </div>
             </div>
+
+            {/* Current Physical Cash in Drawer */}
             <div className="flex items-baseline gap-2">
-              <span className="text-3xl font-black text-slate-900 font-mono">
-                {todayRevenue.toLocaleString('ar-SA')}
+              <span className="text-3xl font-black text-amber-950 font-mono tracking-tight">
+                {currentCashInDrawer.toLocaleString('ar-SA')}
               </span>
-              <span className="text-xs font-bold text-slate-500">{farmSettings.currency}</span>
+              <span className="text-xs font-bold text-amber-800">{farmSettings.currency}</span>
             </div>
-            <div className="mt-3 flex items-center justify-between text-[11px] text-slate-500 pt-2 border-t border-slate-100">
-              <span>المحصل نقداً: <b className="text-emerald-700">{todayCashCollected}</b></span>
+
+            <div className="text-[10px] text-slate-500 font-medium mt-0.5 flex items-center justify-between">
+              <span>نقدية الدرج المتوفرة حالياً</span>
+              {todayEWalletsTotal > 0 && (
+                <span className="text-teal-700 font-mono font-bold">
+                  +{todayEWalletsTotal.toLocaleString('ar-SA')} إلكتروني
+                </span>
+              )}
+            </div>
+
+            {/* Quick breakdown & Reconciliation Actions */}
+            <div className="mt-3 flex items-center justify-between text-[11px] pt-2 border-t border-amber-200/60">
               <button
-                onClick={() => onNavigate('cash_register')}
-                className="text-amber-700 font-bold hover:underline"
+                type="button"
+                onClick={() => setShowCashDrawerModal(true)}
+                className="text-amber-800 hover:text-amber-950 font-black flex items-center gap-1 text-[11px] cursor-pointer"
               >
-                جرد الصندوق ←
+                <Eye className="w-3.5 h-3.5" />
+                <span>كشف الدرج</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onNavigate('cash_register')}
+                className="px-2.5 py-1 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-[10px] flex items-center gap-1 shadow-xs transition-colors cursor-pointer"
+              >
+                <Coins className="w-3 h-3" />
+                <span>مطابقة الوردية ←</span>
               </button>
             </div>
           </div>
@@ -715,7 +1007,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
             </div>
             <button
               onClick={() => onNavigate('batteries')}
-              className="text-xs text-emerald-600 hover:text-emerald-700 font-bold flex items-center gap-1"
+              className="text-xs text-emerald-600 hover:text-emerald-700 font-bold flex items-center gap-1 cursor-pointer"
             >
               <span>عرض الكل</span>
               <ArrowUpRight className="w-3.5 h-3.5" />
@@ -754,7 +1046,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
             </div>
             <button
               onClick={() => onNavigate('rooms')}
-              className="text-xs text-sky-600 hover:text-sky-700 font-bold flex items-center gap-1"
+              className="text-xs text-sky-600 hover:text-sky-700 font-bold flex items-center gap-1 cursor-pointer"
             >
               <span>عرض الكل</span>
               <ArrowUpRight className="w-3.5 h-3.5" />
@@ -796,40 +1088,173 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
           </div>
         </div>
 
-        {/* Right Column: Environmental & Equipment Quick Check */}
+        {/* Right Column: Customer Debt & Environmental Overview */}
         <div className="p-6 rounded-3xl glass-panel space-y-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <Fan className="w-5 h-5 text-teal-600" />
-              <h3 className="font-black text-slate-800 text-sm">السجل البيئي والمعدات</h3>
+              <Users className="w-5 h-5 text-indigo-600" />
+              <h3 className="font-black text-slate-800 text-sm">الديون المستحقة والبيئة</h3>
             </div>
             <button
-              onClick={() => onNavigate('equipment')}
-              className="text-xs text-teal-600 hover:text-teal-700 font-bold flex items-center gap-1"
+              onClick={() => onNavigate('customers')}
+              className="text-xs text-indigo-600 hover:text-indigo-700 font-bold flex items-center gap-1 cursor-pointer"
             >
-              <span>فتح السجل</span>
+              <span>العملاء</span>
               <ArrowUpRight className="w-3.5 h-3.5" />
             </button>
           </div>
 
-          <div className="p-4 rounded-2xl bg-teal-50/40 border border-teal-100 space-y-2 text-xs">
-            <div className="flex justify-between items-center text-teal-950 font-bold">
-              <span>حالة تهوية الغرف والشفاطات:</span>
-              <span className="text-emerald-700 font-black">منتظمة (24°C)</span>
+          <div className="p-4 rounded-2xl bg-indigo-50/40 border border-indigo-100 space-y-2.5 text-xs">
+            <div className="flex justify-between items-center text-indigo-950 font-bold">
+              <span>إجمالي ديون العملاء الآجلة:</span>
+              <span className="text-rose-700 font-black font-mono text-sm">
+                {totalCustomerDebt.toLocaleString('ar-SA')} {farmSettings.currency}
+              </span>
             </div>
-            <div className="flex justify-between items-center text-teal-900 text-[11px]">
+            <div className="flex justify-between items-center text-slate-600 text-[11px] pt-1 border-t border-indigo-100/70">
+              <span>حالة تهوية العنابر والشفاطات:</span>
+              <span className="text-emerald-700 font-bold">منتظمة (24°C)</span>
+            </div>
+            <div className="flex justify-between items-center text-slate-600 text-[11px]">
               <span>مضخات خلايا التبريد:</span>
-              <span>تعمل آلياً بالظهيرة</span>
-            </div>
-            <div className="flex justify-between items-center text-teal-900 text-[11px]">
-              <span>دفايات التحضين (غرفة 6 و 7):</span>
-              <span>34°C مضبوطة</span>
+              <span className="text-slate-800">تعمل آلياً بالظهيرة</span>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Modal: تحليل استهلاك وتكاليف الأعلاف للقطيع */}
+      {/* ============================================================== */}
+      {/* MODAL 1: QUICK CASH DRAWER & FINANCIAL BREAKDOWN MODAL         */}
+      {/* نافذة كشف حساب مالية الصندوق والدرج السريعة                       */}
+      {/* ============================================================== */}
+      {showCashDrawerModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fadeIn" dir="rtl">
+          <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl border border-slate-100 overflow-hidden flex flex-col">
+            {/* Modal Header */}
+            <div className="p-5 bg-gradient-to-r from-amber-500 via-amber-600 to-amber-700 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-2xl bg-white/20 flex items-center justify-center">
+                  <Wallet className="w-5 h-5 stroke-[2.5]" />
+                </div>
+                <div>
+                  <h3 className="font-black text-base">كشف حساب مالية الصندوق والدرج</h3>
+                  <p className="text-[11px] text-amber-100">
+                    تاريخ اليوم: {todayStr} • المشرف: {userName || 'مدير المزرعة'}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCashDrawerModal(false)}
+                className="w-8 h-8 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-5 space-y-4 text-xs">
+              {/* Big Drawer Balance Card */}
+              <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-center">
+                <span className="text-xs font-bold text-amber-900 block mb-1">
+                  الرصيد النقدي الفعلي المتوقع في الدرج الآن (Cash in Drawer)
+                </span>
+                <div className="text-3xl font-black font-mono text-amber-950">
+                  {currentCashInDrawer.toLocaleString('ar-SA')}{' '}
+                  <span className="text-xs font-normal font-almarai">{farmSettings.currency}</span>
+                </div>
+                <div className="mt-1 flex items-center justify-center gap-1.5 text-[11px]">
+                  <span className={`px-2 py-0.5 rounded-full font-bold ${
+                    isShiftClosedToday
+                      ? 'bg-slate-200 text-slate-700'
+                      : 'bg-emerald-100 text-emerald-800'
+                  }`}>
+                    {isShiftClosedToday ? '🔒 تم إغلاق وجرد الوردية' : '🟢 الوردية نشطة والدرج قيد الحركة'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Transactions Ledger */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 border border-slate-100">
+                  <span className="text-slate-600 font-bold">الرصيد الافتتاحي (المرحّل من الأمس):</span>
+                  <span className="font-mono font-black text-slate-800 text-sm">
+                    {openingBalance.toLocaleString('ar-SA')} {farmSettings.currency}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between p-2.5 rounded-xl bg-emerald-50/70 border border-emerald-100">
+                  <span className="text-emerald-950 font-bold flex items-center gap-1.5">
+                    <ArrowDownLeft className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>مبيعات نقدية دخلت الصندوق:</span>
+                  </span>
+                  <span className="font-mono font-black text-emerald-800 text-sm">
+                    +{todayCashSales.toLocaleString('ar-SA')} {farmSettings.currency}
+                  </span>
+                </div>
+
+                {todayCashVouchers > 0 && (
+                  <div className="flex items-center justify-between p-2.5 rounded-xl bg-emerald-50/70 border border-emerald-100">
+                    <span className="text-emerald-950 font-bold flex items-center gap-1.5">
+                      <ArrowDownLeft className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>سندات قبض نقدية من سداد ديون:</span>
+                    </span>
+                    <span className="font-mono font-black text-emerald-800 text-sm">
+                      +{todayCashVouchers.toLocaleString('ar-SA')} {farmSettings.currency}
+                    </span>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between p-2.5 rounded-xl bg-rose-50/70 border border-rose-100">
+                  <span className="text-rose-950 font-bold flex items-center gap-1.5">
+                    <ArrowUpRight className="w-3.5 h-3.5 text-rose-600" />
+                    <span>مصروفات ومشتريات صرفت نقداً:</span>
+                  </span>
+                  <span className="font-mono font-black text-rose-800 text-sm">
+                    -{todayCashExpenses.toLocaleString('ar-SA')} {farmSettings.currency}
+                  </span>
+                </div>
+
+                {todayEWalletsTotal > 0 && (
+                  <div className="flex items-center justify-between p-2.5 rounded-xl bg-teal-50/70 border border-teal-100">
+                    <span className="text-teal-950 font-bold flex items-center gap-1.5">
+                      <Smartphone className="w-3.5 h-3.5 text-teal-600" />
+                      <span>مقبوضات محافظ إلكترونية (كريمي/جيب):</span>
+                    </span>
+                    <span className="font-mono font-black text-teal-800 text-sm">
+                      {todayEWalletsTotal.toLocaleString('ar-SA')} {farmSettings.currency}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCashDrawerModal(false);
+                  onNavigate('cash_register');
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 shadow-sm transition-colors cursor-pointer"
+              >
+                <Coins className="w-4 h-4" />
+                <span>فتح شاشة مطابقة الصندوق الكاملة ←</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowCashDrawerModal(false)}
+                className="px-4 py-2.5 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-xs transition-colors cursor-pointer"
+              >
+                إغلاق
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal 2: تحليل استهلاك وتكاليف الأعلاف للقطيع */}
       {showFeedAnalyticsModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fadeIn" dir="rtl">
           <div className="bg-white rounded-3xl max-w-4xl w-full max-h-[92vh] overflow-y-auto shadow-2xl border border-slate-100 flex flex-col">
@@ -1291,3 +1716,5 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
     </div>
   );
 };
+
+export default DashboardView;

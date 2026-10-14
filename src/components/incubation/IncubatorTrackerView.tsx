@@ -132,8 +132,9 @@ export const IncubatorTrackerView: React.FC = () => {
   const [broodFeedType, setBroodFeedType] = useState<FeedType>('starter_24_27');
   const [broodNotes, setBroodNotes] = useState('');
 
-  // Schedule Settings Form (Custom Grams / Day)
+  // Schedule Settings Form (Custom Grams / Day & Feed Type)
   const [editRates, setEditRates] = useState<BroodingWeeklyRate[]>(DEFAULT_BROODING_RATES);
+  const [syncWithActiveBatches, setSyncWithActiveBatches] = useState<boolean>(true);
 
   // --- Sexing & Partial Transfer State (فرز الجنسين والنقل الجزئي للقطيع) ---
   const [activeBatchForSexing, setActiveBatchForSexing] = useState<BroodingBatch | null>(null);
@@ -806,9 +807,18 @@ export const IncubatorTrackerView: React.FC = () => {
     setShowAddBroodModal(false);
   };
 
-  // 6. Save Schedule Settings (Customize grams per chick per day)
+  // 6. Save Schedule Settings (Customize grams per chick per day & feed type)
   const handleOpenScheduleSettings = () => {
-    setEditRates([...activeRates]);
+    const initialized = activeRates.map((r) => ({
+      ...r,
+      feedType: r.feedType || (r.weekNumber <= 4 ? 'starter_24_27' : 'grower_fattening'),
+      recommendedFeed:
+        r.recommendedFeed ||
+        (r.feedType === 'grower_fattening'
+          ? 'علف نامي 20-22% بروتين'
+          : 'علف بادي 24-27% بروتين'),
+    }));
+    setEditRates(initialized);
     setShowScheduleSettingsModal(true);
   };
 
@@ -818,7 +828,32 @@ export const IncubatorTrackerView: React.FC = () => {
       key: 'broodingFeedSchedule',
       value: { rates: editRates },
     });
-    toast('تم حفظ جدول استهلاك الأعلاف المعياري لجميع أسابيع التحضين بنجاح!', 'success');
+
+    if (syncWithActiveBatches && broodingBatches) {
+      const activeBatches = broodingBatches.filter((b) => b.status === 'active');
+      let updatedCount = 0;
+      for (const batch of activeBatches) {
+        const start = new Date(batch.hatchDate);
+        const today = new Date();
+        const diffTime = today.getTime() - start.getTime();
+        const ageDays = Math.max(1, Math.floor(diffTime / (1000 * 60 * 60 * 24)) + 1);
+        const currentWeek =
+          ageDays <= 7 ? 1 : ageDays <= 14 ? 2 : ageDays <= 21 ? 3 : ageDays <= 28 ? 4 : 5;
+        const rateForWeek = editRates.find((r) => r.weekNumber === currentWeek);
+        if (rateForWeek?.feedType && rateForWeek.feedType !== batch.selectedFeedType) {
+          await db.broodingBatches.update(batch.id, {
+            selectedFeedType: rateForWeek.feedType,
+            updatedAt: new Date().toISOString(),
+          });
+          updatedCount++;
+        }
+      }
+      if (updatedCount > 0) {
+        toast(`تم تحديث نوع العلف لـ ${updatedCount} دفعات تحضين نشطة فوراً وفقاً لجدول الأعلاف الجديد!`, 'info');
+      }
+    }
+
+    toast('تم حفظ جدول استهلاك الأعلاف المعياري ونوع العلف المخصص بنجاح!', 'success');
     setShowScheduleSettingsModal(false);
   };
 
@@ -1943,7 +1978,7 @@ export const IncubatorTrackerView: React.FC = () => {
                 className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs flex items-center gap-1.5 shadow-sm transition-all"
               >
                 <Settings className="w-3.5 h-3.5" />
-                <span>تعديل معايير الجرامات (⚙️)</span>
+                <span>تعديل معايير الجرامات ونوع العلف (⚙️)</span>
               </button>
             </div>
 
@@ -1958,7 +1993,7 @@ export const IncubatorTrackerView: React.FC = () => {
                     <th className="p-3.5">الأسبوع والعمر</th>
                     <th className="p-3.5">مرحلة التحضين</th>
                     <th className="p-3.5">بيئة التدفئة والحرارة</th>
-                    <th className="p-3.5">نوع العلف الموصى به</th>
+                    <th className="p-3.5">نوع العلف المخصص</th>
                     <th className="p-3.5 text-center">معدل الاستهلاك المعياري</th>
                     <th className="p-3.5 text-center">استهلاك 100 كتكوت/يوم</th>
                   </tr>
@@ -1966,6 +2001,10 @@ export const IncubatorTrackerView: React.FC = () => {
                 <tbody className="divide-y divide-slate-100">
                   {activeRates.map((rate) => {
                     const isP1 = rate.phase === 'phase1_heated';
+                    const isStarter =
+                      (rate.feedType || (rate.weekNumber <= 4 ? 'starter_24_27' : 'grower_fattening')) ===
+                      'starter_24_27';
+
                     return (
                       <tr key={rate.weekNumber} className="hover:bg-slate-50/70 transition-colors">
                         <td className="p-3.5 font-bold text-slate-900">{rate.label}</td>
@@ -1979,7 +2018,23 @@ export const IncubatorTrackerView: React.FC = () => {
                           </span>
                         </td>
                         <td className="p-3.5 font-medium text-slate-700">{rate.recommendedTempC}</td>
-                        <td className="p-3.5 text-slate-700">{rate.recommendedFeed}</td>
+                        <td className="p-3.5">
+                          <span
+                            className={`px-2.5 py-1 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 border shadow-2xs ${
+                              isStarter
+                                ? 'bg-amber-50 text-amber-900 border-amber-200'
+                                : 'bg-teal-50 text-teal-900 border-teal-200'
+                            }`}
+                          >
+                            <span>{isStarter ? '🌾' : '🌱'}</span>
+                            <span>
+                              {rate.recommendedFeed ||
+                                (isStarter
+                                  ? 'علف بادي 24-27% بروتين'
+                                  : 'علف نامي 20-22% بروتين')}
+                            </span>
+                          </span>
+                        </td>
                         <td className="p-3.5 text-center font-mono font-black text-amber-900 text-sm">
                           {rate.defaultGramsPerChickDay} جم / طير / يوم
                         </td>
@@ -2879,7 +2934,7 @@ export const IncubatorTrackerView: React.FC = () => {
       {/* Modal: Custom Feed Schedule Settings */}
       {showScheduleSettingsModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-fadeIn">
-          <div className="bg-white rounded-3xl p-6 max-w-lg w-full shadow-apple-modal border border-slate-100 text-right max-h-[90vh] overflow-y-auto">
+          <div className="bg-white rounded-3xl p-6 max-w-xl w-full shadow-apple-modal border border-slate-100 text-right max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
               <div className="flex items-center gap-2">
                 <div className="p-2 rounded-xl bg-indigo-50 text-indigo-700">
@@ -2887,10 +2942,10 @@ export const IncubatorTrackerView: React.FC = () => {
                 </div>
                 <div>
                   <h3 className="text-base font-black text-slate-900">
-                    تعديل معايير جدول استهلاك الأعلاف
+                    تعديل معايير جدول استهلاك الأعلاف ونوع العلف
                   </h3>
                   <p className="text-[11px] text-slate-500">
-                    تخصيص معدل الجرامات لكل كتكوت حسب الأسبوع
+                    تخصيص معدل الجرامات ونوع العلف المقدم للكتاكيت لكل أسبوع ومرحلة
                   </p>
                 </div>
               </div>
@@ -2903,41 +2958,169 @@ export const IncubatorTrackerView: React.FC = () => {
             </div>
 
             <form onSubmit={handleSaveScheduleSettings} className="space-y-4">
-              <div className="space-y-3">
-                {editRates.map((r, idx) => (
-                  <div
-                    key={r.weekNumber}
-                    className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-3 text-xs"
+              {/* Quick Preset Banner */}
+              <div className="p-3.5 bg-gradient-to-r from-amber-50 to-orange-50 rounded-2xl border border-amber-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-2xs">
+                <div className="space-y-0.5">
+                  <div className="font-black text-xs text-amber-950 flex items-center gap-1.5">
+                    <span>🌾</span>
+                    <span>استمرار بعلف بادي لجميع الأسابيع (حتى مرحلة النضوج):</span>
+                  </div>
+                  <p className="text-[11px] text-amber-800 leading-snug">
+                    تثبيت علف بادي 24-27% لجميع أسابيع التحضين دون تحويل الكتاكيت إلى نامي
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditRates((prev) =>
+                        prev.map((r) => ({
+                          ...r,
+                          feedType: 'starter_24_27',
+                          recommendedFeed: 'علف بادي 24-27% بروتين',
+                        }))
+                      );
+                      toast('تم ضبط جميع أسابيع التحضين على علف بادي (بدائي) حتى مرحلة النضوج 🌾', 'info');
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-black text-xs shadow-2xs transition-all active:scale-95 flex items-center gap-1"
                   >
-                    <div>
-                      <div className="font-bold text-slate-900">{r.label}</div>
-                      <div className="text-[10px] text-slate-500">
-                        {r.phaseLabel} • {r.recommendedTempC}
+                    <span>⚡ اعتماد بادي للكل</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Weekly Rates List */}
+              <div className="space-y-3">
+                {editRates.map((r, idx) => {
+                  const currentFeed = r.feedType || (r.weekNumber <= 3 ? 'starter_24_27' : 'grower_fattening');
+                  const isStarter = currentFeed === 'starter_24_27';
+
+                  return (
+                    <div
+                      key={r.weekNumber}
+                      className="p-3.5 rounded-2xl bg-slate-50 hover:bg-slate-100/70 border border-slate-200 transition-all space-y-2.5"
+                    >
+                      {/* Top: Week title and grams input */}
+                      <div className="flex items-center justify-between gap-3 text-xs">
+                        <div>
+                          <div className="font-black text-slate-900 flex items-center gap-1.5">
+                            <span>{r.label}</span>
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                r.phase === 'phase1_heated'
+                                  ? 'bg-amber-100 text-amber-900'
+                                  : 'bg-sky-100 text-sky-900'
+                              }`}
+                            >
+                              {r.phaseLabel}
+                            </span>
+                          </div>
+                          <div className="text-[10px] text-slate-500 mt-0.5">
+                            الحرارة الموصى بها: {r.recommendedTempC}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          <input
+                            type="number"
+                            min="1"
+                            max="50"
+                            step="0.5"
+                            required
+                            value={r.defaultGramsPerChickDay}
+                            onChange={(e) => {
+                              const val = Number(e.target.value);
+                              setEditRates((prev) =>
+                                prev.map((item, i) =>
+                                  i === idx ? { ...item, defaultGramsPerChickDay: val } : item
+                                )
+                              );
+                            }}
+                            className="w-20 glass-input text-center font-mono font-black text-sm text-amber-900 py-1"
+                          />
+                          <span className="text-[11px] font-bold text-slate-500">جم / يوم</span>
+                        </div>
+                      </div>
+
+                      {/* Bottom: Feed Type Selection for this Week */}
+                      <div className="pt-2 border-t border-slate-200/60 flex flex-wrap items-center justify-between gap-2 text-xs">
+                        <span className="text-[11px] font-bold text-slate-600 flex items-center gap-1">
+                          <span>🥣</span>
+                          <span>نوع العلف المقدم للكتاكيت:</span>
+                        </span>
+
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditRates((prev) =>
+                                prev.map((item, i) =>
+                                  i === idx
+                                    ? {
+                                        ...item,
+                                        feedType: 'starter_24_27',
+                                        recommendedFeed: 'علف بادي 24-27% بروتين',
+                                      }
+                                    : item
+                                )
+                              );
+                            }}
+                            className={`py-1 px-2.5 rounded-xl text-xs font-bold border transition-all flex items-center gap-1 ${
+                              isStarter
+                                ? 'bg-amber-600 text-white border-amber-600 shadow-2xs'
+                                : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                            }`}
+                          >
+                            <span>🌾</span>
+                            <span>بادي 24-27% (بدائي)</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditRates((prev) =>
+                                prev.map((item, i) =>
+                                  i === idx
+                                    ? {
+                                        ...item,
+                                        feedType: 'grower_fattening',
+                                        recommendedFeed: 'علف نامي 20-22% بروتين',
+                                      }
+                                    : item
+                                )
+                              );
+                            }}
+                            className={`py-1 px-2.5 rounded-xl text-xs font-bold border transition-all flex items-center gap-1 ${
+                              !isStarter
+                                ? 'bg-teal-600 text-white border-teal-600 shadow-2xs'
+                                : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                            }`}
+                          >
+                            <span>🌱</span>
+                            <span>نامي 20-22% (تسمين)</span>
+                          </button>
+                        </div>
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="number"
-                        min="1"
-                        max="50"
-                        step="0.5"
-                        required
-                        value={r.defaultGramsPerChickDay}
-                        onChange={(e) => {
-                          const val = Number(e.target.value);
-                          setEditRates((prev) =>
-                            prev.map((item, i) =>
-                              i === idx ? { ...item, defaultGramsPerChickDay: val } : item
-                            )
-                          );
-                        }}
-                        className="w-20 glass-input text-center font-mono font-black text-sm text-amber-900 py-1"
-                      />
-                      <span className="text-[11px] font-bold text-slate-500">جم / يوم</span>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
+
+              {/* Sync with Active Brooding Batches */}
+              <label className="flex items-center gap-2.5 p-3 rounded-2xl bg-indigo-50/70 border border-indigo-200 cursor-pointer text-xs">
+                <input
+                  type="checkbox"
+                  checked={syncWithActiveBatches}
+                  onChange={(e) => setSyncWithActiveBatches(e.target.checked)}
+                  className="w-4 h-4 text-indigo-600 rounded accent-indigo-600"
+                />
+                <div className="text-slate-800">
+                  <span className="font-bold">مزامنة دفعات التحضين النشطة فوراً:</span>
+                  <span className="text-[11px] text-slate-600 block">
+                    تطبيق نوع العلف المختار على كافة دفعات التحضين الحالية بالمزرعة وفقاً لأعمارها
+                  </span>
+                </div>
+              </label>
 
               <div className="flex items-center justify-between pt-3 border-t border-slate-100">
                 <button

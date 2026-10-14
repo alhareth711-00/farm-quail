@@ -108,10 +108,16 @@ export async function purchaseFeedStock(
   const newTotalKg = newBags * 50;
 
   // 4. إعداد أطراف القيد المحاسبي المزدوج المتوازن
-  // الطرف المدين: مصروفات شراء واستخدام الأعلاف (50101)
-  const debitAccountId = 'acc-50101';
-  const debitAccountCode = '50101';
-  const debitAccountName = 'مصروفات شراء واستخدام الأعلاف';
+  // الفصل المحاسبي الدقيق بين حساب العلف البدائي (50101) وحساب العلف البياض (50102)
+  const isLayerFeed = feedType === 'layer_production';
+  const debitAccountId = isLayerFeed ? 'acc-50102' : 'acc-50101';
+  const debitAccountCode = isLayerFeed ? '50102' : '50101';
+  const liveDebitAcc =
+    (await db.accounts.get(debitAccountId)) ||
+    (await db.accounts.where('code').equals(debitAccountCode).first());
+  const debitAccountName =
+    liveDebitAcc?.name ||
+    (isLayerFeed ? 'مصروفات شراء واستخدام العلف البياض' : 'مصروفات شراء واستخدام العلف البدائي');
 
   // الطرف الدائن: الصندوق أو البنك أو المورد
   let creditAccountId = 'acc-10101';
@@ -178,7 +184,7 @@ export async function purchaseFeedStock(
   const expenseRecord: ExpenseRecord = {
     id: expenseId,
     date,
-    category: 'feed_purchase',
+    category: debitAccountId,
     amount: totalAmount,
     description: `شراء وتوريد ${bags} كيس ${existingStock.name} (متوسط تكلفة: ${newWAC.toLocaleString('ar-SA')} ر.ي)`,
     recipient: supplier?.trim() || undefined,

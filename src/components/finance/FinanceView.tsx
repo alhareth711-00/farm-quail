@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { db } from '../../db';
 import { useLiveQuery } from 'dexie-react-hooks';
 import type {
@@ -10,12 +10,16 @@ import type {
   VoucherPaymentType,
   OrderInvoice,
   FeedType,
+  Account,
 } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import {
   recordExpenseJournalEntry,
   recordReceiptVoucherJournalEntry,
+  updateAccount,
+  createAccount,
+  resolveExpenseAccount,
 } from '../../services/accountingService';
 import {
   purchaseFeedStock,
@@ -55,6 +59,8 @@ import {
   FileCheck,
   Calculator,
   Package,
+  Fuel,
+  Edit3,
 } from 'lucide-react';
 
 interface FinanceViewProps {
@@ -143,6 +149,13 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
   const [newCatName, setNewCatName] = useState('');
   const [newCatDesc, setNewCatDesc] = useState('');
 
+  // 3.1 Edit Category Name Modal (تعديل اسم الصنف في التصنيف المحاسبي للمصروف)
+  const [showEditCategoryModal, setShowEditCategoryModal] = useState(false);
+  const [editingCategoryAccount, setEditingCategoryAccount] = useState<Account | null>(null);
+  const [editedCategoryName, setEditedCategoryName] = useState('');
+  const [editedCategoryDesc, setEditedCategoryDesc] = useState('');
+  const [isEditingCategorySubmitting, setIsEditingCategorySubmitting] = useState(false);
+
   // 4. Farm Purchase Modal
   const [showAddPurchaseModal, setShowAddPurchaseModal] = useState(false);
   const [purchDate, setPurchDate] = useState(new Date().toISOString().split('T')[0]);
@@ -209,20 +222,56 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
   const netProfit = totalInvoicedSales - (totalExpensesAmount + totalPurchasesAmount);
   const profitMargin = totalInvoicedSales > 0 ? Math.round((netProfit / totalInvoicedSales) * 100) : 0;
 
+  // Live expense accounts from Chart of Accounts (ربط مباشر وتفاعلي مع شجرة الحسابات)
+  const expenseAccounts = useMemo(() => {
+    return (accounts || [])
+      .filter((a) => a.type === 'expense' && a.isActive !== false)
+      .sort((a, b) => a.code.localeCompare(b.code));
+  }, [accounts]);
+
+  const getAccountIcon = (acc: Account) => {
+    if (acc.code === '50101' || acc.subType === 'cogs_feed_starter') return '🌾';
+    if (acc.code === '50102' || acc.subType === 'cogs_feed_layer') return '🥚';
+    if (acc.code === '50103' || acc.subType === 'petrol_car') return '🚗';
+    if (acc.code === '50104' || acc.subType === 'petrol_motor') return '🛵';
+    if (acc.code === '50105' || acc.subType === 'cogs_medication') return '💊';
+    if (acc.code === '50106' || acc.subType === 'payroll') return '👥';
+    if (acc.code === '50107' || acc.subType === 'maintenance') return '🔧';
+    if (acc.code === '50108' || acc.subType === 'utilities') return '💡';
+    if (acc.code === '50109' || acc.subType === 'packaging') return '📦';
+    if (acc.code === '50110' || acc.subType === 'bedding') return '🪵';
+    return '🏷️';
+  };
+
   // Base Category Labels dictionary
   const baseCategoryLabels: Record<string, string> = {
-    feed_purchase: 'شراء واستخدام أعلاف',
-    packaging_bedding: 'نشارة خشب وأطباق تعبئة',
-    utilities_maintenance: 'صيانة عنابر وأقفاص ومعدات',
-    salaries_advances: 'سلف وأجور ورواتب العمال',
-    delivery_petrol: 'بترول ومحروقات التوصيل والمولد',
-    medications_vitamins: 'أدوية وفيتامينات ولقاحات',
-    electricity_water: 'فواتير كهرباء ومياه وتشغيل',
-    other: 'مصروفات تشغيلية أخرى',
+    feed_purchase: 'مصروفات شراء واستخدام الأعلاف',
+    feed_purchase_starter: 'مصروفات شراء واستخدام العلف البدائي',
+    feed_purchase_layer: 'مصروفات شراء واستخدام العلف البياض',
+    packaging: 'مصروفات التغليف والتعبئة (أطباق وكراتين)',
+    bedding: 'مصروفات نشارة الخشب وفرشة العنابر',
+    packaging_bedding: 'مصروفات التغليف ونشارة الخشب',
+    utilities_maintenance: 'مصروفات صيانة عنابر وأقفاص ومعدات',
+    salaries_advances: 'مصروفات رواتب وأجور وسلفيات العمال',
+    delivery_petrol: 'مصروفات البترول',
+    delivery_petrol_car: 'مصروفات البترول - السيارة',
+    delivery_petrol_motor: 'مصروفات البترول - المتر',
+    medications_vitamins: 'مصروفات أدوية ولقاحات بيطرية',
+    electricity_water: 'مصروفات فواتير كهرباء ومياه وتشغيل',
+    other: 'مصروفات إدارية وتشغيلية أخرى',
   };
 
   const getCategoryLabel = (cat: string) => {
+    // 1. فحص الحسابات في شجرة الحسابات لجلب الاسم الحالي والمعدل مباشرة
+    const foundAcc = accounts?.find(
+      (a) => a.id === cat || a.code === cat || a.name === cat
+    );
+    if (foundAcc) return foundAcc.name;
+
+    // 2. فحص القواميس الافتراضية
     if (baseCategoryLabels[cat]) return baseCategoryLabels[cat];
+
+    // 3. فحص التصنيفات المخصصة
     const foundCustom = customCategories?.find((c) => c.name === cat || c.id === cat);
     return foundCustom ? foundCustom.name : cat;
   };
@@ -371,12 +420,25 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
     setShowVoucherModal(true);
   };
 
-  // Unified Handler: Save Financial Voucher (سند صرف أو قبض مالي)
   const handleSaveVoucher = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (voucherType === 'expense') {
-      const isFeed = expCategory === 'feed_purchase';
+      const selectedExp = accounts?.find(
+        (a) => a.id === expCategory || a.code === expCategory || a.name === expCategory
+      );
+      const isFeed =
+        expCategory === 'feed_purchase' ||
+        expCategory === 'feed_purchase_starter' ||
+        expCategory === 'feed_purchase_layer' ||
+        expCategory === 'acc-50101' ||
+        expCategory === 'acc-50102' ||
+        expCategory === '50101' ||
+        expCategory === '50102' ||
+        selectedExp?.code === '50101' ||
+        selectedExp?.code === '50102' ||
+        selectedExp?.subType === 'cogs_feed_starter' ||
+        selectedExp?.subType === 'cogs_feed_layer';
       const bags = Number(feedBagsCount);
       const cost = Number(feedCostPerBag);
       const calculatedFeedTotal = isFeed ? bags * cost : 0;
@@ -530,7 +592,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
     }
   };
 
-  // 3. Save Custom Category
+  // 3. Save Custom Category & Create in Chart of Accounts (تكامل تلقائي وفوري مع شجرة الحسابات)
   const handleSaveCustomCategory = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newCatName.trim()) {
@@ -538,26 +600,122 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
       return;
     }
 
-    const exists = customCategories?.some(
-      (c) => c.name.trim().toLowerCase() === newCatName.trim().toLowerCase()
-    );
-    if (exists || baseCategoryLabels[newCatName.trim()]) {
-      toast('هذا التصنيف موجود مسبقاً', 'warning');
+    const trimmedName = newCatName.trim();
+    const exists =
+      customCategories?.some(
+        (c) => c.name.trim().toLowerCase() === trimmedName.toLowerCase()
+      ) ||
+      accounts?.some(
+        (a) => a.name.trim().toLowerCase() === trimmedName.toLowerCase()
+      );
+
+    if (exists) {
+      toast('هذا التصنيف أو الحساب موجود مسبقاً', 'warning');
       return;
     }
 
-    const newCat: CustomExpenseCategory = {
-      id: `cat-${Date.now()}`,
-      name: newCatName.trim(),
-      description: newCatDesc.trim() || undefined,
-      createdAt: new Date().toISOString(),
-    };
+    try {
+      // توليد كود الحساب التالي تلقائياً في فئة المصروفات 501xx
+      const existingExpenseCodes = (accounts || [])
+        .filter((a) => a.code.startsWith('501'))
+        .map((a) => parseInt(a.code, 10))
+        .filter((n) => !isNaN(n));
+      const nextCode =
+        existingExpenseCodes.length > 0
+          ? (Math.max(...existingExpenseCodes) + 1).toString()
+          : '50112';
 
-    await db.customCategories.add(newCat);
-    toast(`تم إضافة تصنيف "${newCat.name}" بنجاح!`, 'success');
-    setShowAddCategoryModal(false);
-    setNewCatName('');
-    setNewCatDesc('');
+      const createdAcc = await createAccount({
+        code: nextCode,
+        name: trimmedName,
+        type: 'expense',
+        subType: 'custom_expense',
+        normalBalance: 'debit',
+        description: newCatDesc.trim() || 'تصنيف مصروف مخصص من قسم المالية',
+        createdBy: userName || 'محاسب المالية',
+      });
+
+      const newCat: CustomExpenseCategory = {
+        id: createdAcc.id,
+        name: trimmedName,
+        description: newCatDesc.trim() || undefined,
+        createdAt: new Date().toISOString(),
+      };
+      await db.customCategories.put(newCat);
+
+      setExpCategory(createdAcc.id);
+      toast(
+        `تمت إضافة تصنيف "${trimmedName}" بنجاح (كود: ${nextCode}) وربطه فورياً بشجرة الحسابات والمالية!`,
+        'success'
+      );
+      setShowAddCategoryModal(false);
+      setNewCatName('');
+      setNewCatDesc('');
+    } catch (err: any) {
+      console.error('Error creating custom category:', err);
+      toast(err?.message || 'تعذر إضافة التصنيف المحاسبي', 'error');
+    }
+  };
+
+  // 3.1 فتح نافذة تعديل اسم الصنف / الحساب المحدد في سند الصرف
+  const handleOpenEditCategory = () => {
+    const acc =
+      accounts?.find(
+        (a) => a.id === expCategory || a.code === expCategory || a.name === expCategory
+      ) ||
+      accounts?.find((a) => a.code === '50101') ||
+      expenseAccounts[0];
+
+    if (!acc) {
+      toast('يرجى اختيار تصنيف مصروف أولاً لتعديله', 'warning');
+      return;
+    }
+
+    setEditingCategoryAccount(acc);
+    setEditedCategoryName(acc.name);
+    setEditedCategoryDesc(acc.description || '');
+    setShowEditCategoryModal(true);
+  };
+
+  // 3.2 حفظ تعديل اسم الصنف وتحديث شجرة الحسابات فورياً
+  const handleUpdateCategoryName = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingCategoryAccount || !editedCategoryName.trim()) {
+      toast('يرجى إدخال اسم صحيح للتصنيف المحاسبي', 'error');
+      return;
+    }
+
+    setIsEditingCategorySubmitting(true);
+    try {
+      await updateAccount(editingCategoryAccount.id, {
+        name: editedCategoryName.trim(),
+        description: editedCategoryDesc.trim() || undefined,
+      });
+
+      // مزامنة جدول التصنيفات المخصصة إن وجد
+      const custom = customCategories?.find(
+        (c) =>
+          c.name === editingCategoryAccount.name ||
+          c.id === editingCategoryAccount.id
+      );
+      if (custom) {
+        await db.customCategories.update(custom.id, {
+          name: editedCategoryName.trim(),
+          description: editedCategoryDesc.trim() || undefined,
+        });
+      }
+
+      toast(
+        `تم تعديل اسم الحساب والتصنيف إلى "${editedCategoryName.trim()}" بنجاح! تم تحديث شجرة الحسابات وقسم المالية فوراً.`,
+        'success'
+      );
+      setShowEditCategoryModal(false);
+    } catch (err: any) {
+      console.error('Error updating category name:', err);
+      toast(err?.message || 'تعذر تعديل اسم التصنيف المحاسبي', 'error');
+    } finally {
+      setIsEditingCategorySubmitting(false);
+    }
   };
 
   // 4. Save Independent Farm Purchase
@@ -641,7 +799,16 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
 
   // Filtered Expenses
   const filteredExpenses = periodExpenses.filter((e) => {
-    if (expenseCategoryFilter !== 'all' && e.category !== expenseCategoryFilter) return false;
+    if (expenseCategoryFilter !== 'all') {
+      const resolved = resolveExpenseAccount(e.category, e.description, accounts || []);
+      if (
+        e.category !== expenseCategoryFilter &&
+        resolved.id !== expenseCategoryFilter &&
+        resolved.code !== expenseCategoryFilter
+      ) {
+        return false;
+      }
+    }
     if (expenseSearch.trim()) {
       const q = expenseSearch.trim().toLowerCase();
       const matchDesc = e.description?.toLowerCase().includes(q);
@@ -1103,22 +1270,14 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
                 <select
                   value={expenseCategoryFilter}
                   onChange={(e) => setExpenseCategoryFilter(e.target.value)}
-                  className="py-2 px-3 text-xs rounded-2xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-rose-500/20"
+                  className="py-2 px-3 text-xs rounded-2xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-rose-500/20 font-bold"
                 >
                   <option value="all">كل تصنيفات المصروفات</option>
-                  <option value="feed_purchase">شراء واستخدام أعلاف</option>
-                  <option value="packaging_bedding">نشارة خشب وأطباق تعبئة</option>
-                  <option value="utilities_maintenance">صيانة عنابر وأقفاص</option>
-                  <option value="salaries_advances">رواتب وأجور وسلف</option>
-                  <option value="delivery_petrol">بترول ومحروقات التوصيل</option>
-                  <option value="medications_vitamins">أدوية وفيتامينات</option>
-                  <option value="electricity_water">كهرباء ومياه وتشغيل</option>
-                  {customCategories?.map((c) => (
-                    <option key={c.id} value={c.name}>
-                      {c.name}
+                  {expenseAccounts.map((acc) => (
+                    <option key={acc.id} value={acc.id}>
+                      {getAccountIcon(acc)} {acc.name} ({acc.code})
                     </option>
                   ))}
-                  <option value="other">أخرى</option>
                 </select>
               </div>
             </div>
@@ -1645,7 +1804,37 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
         };
 
         const selectedCustomerInModal = customers?.find((c) => c.id === recCustomerId);
-        const isFeedExpense = voucherType === 'expense' && expCategory === 'feed_purchase';
+        const selectedExpAcc = accounts?.find(
+          (a) => a.id === expCategory || a.code === expCategory || a.name === expCategory
+        );
+        const isFeedExpense =
+          voucherType === 'expense' &&
+          (expCategory === 'feed_purchase' ||
+            expCategory === 'feed_purchase_starter' ||
+            expCategory === 'feed_purchase_layer' ||
+            expCategory === 'acc-50101' ||
+            expCategory === 'acc-50102' ||
+            expCategory === '50101' ||
+            expCategory === '50102' ||
+            selectedExpAcc?.code === '50101' ||
+            selectedExpAcc?.code === '50102' ||
+            selectedExpAcc?.subType === 'cogs_feed_starter' ||
+            selectedExpAcc?.subType === 'cogs_feed_layer');
+
+        const isPetrolExpense =
+          voucherType === 'expense' &&
+          (expCategory === 'delivery_petrol' ||
+            expCategory === 'delivery_petrol_car' ||
+            expCategory === 'delivery_petrol_motor' ||
+            expCategory === 'acc-50103' ||
+            expCategory === 'acc-50104' ||
+            expCategory === '50103' ||
+            expCategory === '50104' ||
+            selectedExpAcc?.code === '50103' ||
+            selectedExpAcc?.code === '50104' ||
+            selectedExpAcc?.subType === 'petrol_car' ||
+            selectedExpAcc?.subType === 'petrol_motor' ||
+            (selectedExpAcc?.name && selectedExpAcc.name.includes('بترول')));
         const selectedFeed = feedStocks?.find((f) => f.feedType === feedType);
 
         const bagsNum = typeof feedBagsCount === 'number' ? Math.max(0, feedBagsCount) : 0;
@@ -1774,15 +1963,45 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
                   {voucherType === 'expense' ? (
                     <>
                       <div>
-                        <label className="block text-xs font-bold text-slate-700 mb-1">
-                          التصنيف المحاسبي للمصروف *
-                        </label>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="block text-xs font-bold text-slate-700">
+                            التصنيف المحاسبي للمصروف *
+                          </label>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={handleOpenEditCategory}
+                              title="تعديل اسم هذا التصنيف في شجرة الحسابات والمالية"
+                              className="px-2 py-0.5 rounded-lg text-[10px] font-extrabold bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 transition-all flex items-center gap-1 shadow-sm"
+                            >
+                              <Edit3 className="w-3 h-3 text-amber-600" />
+                              <span>تعديل الاسم</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setShowAddCategoryModal(true)}
+                              title="إضافة حساب مصروف جديد إلى شجرة الحسابات والمالية"
+                              className="px-2 py-0.5 rounded-lg text-[10px] font-extrabold bg-violet-50 hover:bg-violet-100 text-violet-700 border border-violet-200 transition-all flex items-center gap-1 shadow-sm"
+                            >
+                              <Plus className="w-3 h-3 text-violet-600" />
+                              <span>+ إضافة تصنيف</span>
+                            </button>
+                          </div>
+                        </div>
                         <select
                           value={expCategory}
                           onChange={(e) => {
                             const cat = e.target.value as any;
                             setExpCategory(cat);
-                            if (cat === 'feed_purchase' && feedStocks && feedStocks.length > 0) {
+                            if (cat === 'acc-50101' || cat === '50101') {
+                              setFeedType('starter_24_27');
+                              const f = feedStocks?.find((x) => x.feedType === 'starter_24_27');
+                              if (f && f.costPerBag) setFeedCostPerBag(f.costPerBag);
+                            } else if (cat === 'acc-50102' || cat === '50102') {
+                              setFeedType('layer_production');
+                              const f = feedStocks?.find((x) => x.feedType === 'layer_production');
+                              if (f && f.costPerBag) setFeedCostPerBag(f.costPerBag);
+                            } else if (cat === 'feed_purchase' && feedStocks && feedStocks.length > 0) {
                               const f = feedStocks.find((x) => x.feedType === feedType) || feedStocks[0];
                               setFeedType(f.feedType);
                               if (f.costPerBag) setFeedCostPerBag(f.costPerBag);
@@ -1790,19 +2009,11 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
                           }}
                           className="w-full px-3.5 py-2.5 text-xs rounded-2xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-rose-500/20 font-bold"
                         >
-                          <option value="feed_purchase">🌾 شراء واستخدام أعلاف</option>
-                          <option value="packaging_bedding">🪵 نشارة خشب وأطباق تعبئة</option>
-                          <option value="utilities_maintenance">🔧 صيانة عنابر وأقفاص ومعدات</option>
-                          <option value="salaries_advances">👥 سلف وأجور ورواتب العمال</option>
-                          <option value="delivery_petrol">⛽ بترول ومحروقات التوصيل والمولد</option>
-                          <option value="medications_vitamins">💊 أدوية وفيتامينات ولقاحات</option>
-                          <option value="electricity_water">💡 كهرباء ومياه وتشغيل</option>
-                          {customCategories?.map((c) => (
-                            <option key={c.id} value={c.name}>
-                              🏷️ {c.name}
+                          {expenseAccounts.map((acc) => (
+                            <option key={acc.id} value={acc.id}>
+                              {getAccountIcon(acc)} {acc.name} ({acc.code})
                             </option>
                           ))}
-                          <option value="other">📦 مصروفات تشغيلية أخرى</option>
                         </select>
                       </div>
 
@@ -1883,6 +2094,53 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
                   )}
                 </div>
 
+                {/* تفريع مصروفات البترول: 1. السيارة (50103) | 2. المتر (50104) */}
+                {voucherType === 'expense' && isPetrolExpense && (
+                  <div className="p-3.5 rounded-2xl bg-amber-50/80 border border-amber-200 space-y-2 animate-fadeIn">
+                    <div className="flex items-center justify-between text-xs font-black text-amber-950">
+                      <span className="flex items-center gap-1.5">
+                        <Fuel className="w-4 h-4 text-amber-600" />
+                        <span>تحديد فرع مصروفات البترول (اختر أحدهما): *</span>
+                      </span>
+                      <span className="text-[10px] text-amber-700 font-bold bg-amber-100/70 px-2 py-0.5 rounded-lg">
+                        فرعان مستقلان محاسبياً
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const carAcc = accounts?.find((a) => a.code === '50103');
+                          setExpCategory(carAcc ? carAcc.id : 'acc-50103');
+                        }}
+                        className={`py-2 px-3 rounded-xl border text-xs font-extrabold flex items-center justify-center gap-1.5 transition-all ${
+                          selectedExpAcc?.code === '50103' || expCategory === 'acc-50103' || expCategory === 'delivery_petrol'
+                            ? 'bg-amber-600 text-white border-amber-600 shadow-sm'
+                            : 'bg-white text-slate-700 border-slate-200 hover:bg-amber-50'
+                        }`}
+                      >
+                        <span>🚗 1. السيارة</span>
+                        <span className="text-[10px] opacity-80">(كود 50103)</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const motorAcc = accounts?.find((a) => a.code === '50104');
+                          setExpCategory(motorAcc ? motorAcc.id : 'acc-50104');
+                        }}
+                        className={`py-2 px-3 rounded-xl border text-xs font-extrabold flex items-center justify-center gap-1.5 transition-all ${
+                          selectedExpAcc?.code === '50104' || expCategory === 'acc-50104'
+                            ? 'bg-amber-600 text-white border-amber-600 shadow-sm'
+                            : 'bg-white text-slate-700 border-slate-200 hover:bg-amber-50'
+                        }`}
+                      >
+                        <span>🛵 2. المتر (الدراجة)</span>
+                        <span className="text-[10px] opacity-80">(كود 50104)</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 {/* Customer Debt Quick Badge (for Receipt) */}
                 {voucherType === 'receipt' && selectedCustomerInModal && (
                   <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-between">
@@ -1914,6 +2172,47 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
                       </span>
                     </div>
 
+                    {/* تفريع حسابات العلف: علف بدائي (50101) vs علف بياض (50102) */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 bg-white/90 rounded-xl border border-emerald-300">
+                      <span className="text-[11px] font-bold text-slate-700">التصنيف والحساب المحاسبي للخصم: *</span>
+                      <div className="grid grid-cols-2 gap-1.5 flex-1 max-w-sm">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const starterAcc = accounts?.find((a) => a.code === '50101');
+                            setExpCategory(starterAcc ? starterAcc.id : 'acc-50101');
+                            setFeedType('starter_24_27');
+                            const st = feedStocks?.find((f) => f.feedType === 'starter_24_27');
+                            if (st && st.costPerBag) setFeedCostPerBag(st.costPerBag);
+                          }}
+                          className={`py-1.5 px-2 rounded-lg text-xs font-extrabold flex items-center justify-center gap-1 transition-all ${
+                            selectedExpAcc?.code === '50101' || (feedType !== 'layer_production' && selectedExpAcc?.code !== '50102')
+                              ? 'bg-emerald-600 text-white shadow-sm'
+                              : 'bg-slate-50 text-slate-700 hover:bg-slate-100'
+                          }`}
+                        >
+                          <span>🌾 1. علف بدائي (50101)</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const layerAcc = accounts?.find((a) => a.code === '50102');
+                            setExpCategory(layerAcc ? layerAcc.id : 'acc-50102');
+                            setFeedType('layer_production');
+                            const st = feedStocks?.find((f) => f.feedType === 'layer_production');
+                            if (st && st.costPerBag) setFeedCostPerBag(st.costPerBag);
+                          }}
+                          className={`py-1.5 px-2 rounded-lg text-xs font-extrabold flex items-center justify-center gap-1 transition-all ${
+                            selectedExpAcc?.code === '50102' || (feedType === 'layer_production' && selectedExpAcc?.code !== '50101')
+                              ? 'bg-emerald-600 text-white shadow-sm'
+                              : 'bg-slate-50 text-slate-700 hover:bg-slate-100'
+                          }`}
+                        >
+                          <span>🥚 2. علف بياض (50102)</span>
+                        </button>
+                      </div>
+                    </div>
+
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                       {/* قائمة منسدلة لنوع العلف */}
                       <div>
@@ -1925,6 +2224,13 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
                           onChange={(e) => {
                             const selType = e.target.value as FeedType;
                             setFeedType(selType);
+                            if (selType === 'layer_production') {
+                              const layerAcc = accounts?.find((a) => a.code === '50102');
+                              if (layerAcc) setExpCategory(layerAcc.id);
+                            } else {
+                              const starterAcc = accounts?.find((a) => a.code === '50101');
+                              if (starterAcc) setExpCategory(starterAcc.id);
+                            }
                             const st = feedStocks?.find((f) => f.feedType === selType);
                             if (st && st.costPerBag) setFeedCostPerBag(st.costPerBag);
                           }}
@@ -2181,7 +2487,9 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
                             </span>
                             حـ/{' '}
                             {isFeedExpense
-                              ? 'مصروفات شراء واستخدام الأعلاف (50101)'
+                              ? feedType === 'layer_production'
+                                ? 'مصروفات شراء واستخدام العلف البياض (50102)'
+                                : 'مصروفات شراء واستخدام العلف البدائي (50101)'
                               : getCategoryLabel(expCategory)}
                           </span>
                           <span className="font-black font-sans">
@@ -2543,6 +2851,10 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
             </div>
 
             <form onSubmit={handleSaveCustomCategory} className="space-y-4">
+              <div className="p-3 rounded-2xl bg-violet-50/80 border border-violet-200 text-[11px] text-violet-900 leading-relaxed font-bold">
+                💡 <span className="text-violet-950 font-black">ربط آلي مع شجرة الحسابات:</span> سيتم إنشاء هذا التصنيف تلقائياً كحساب مصروفات جديد في شجرة الحسابات والمحاسبة والتقارير المالية.
+              </div>
+
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">اسم التصنيف *</label>
                 <input
@@ -2571,11 +2883,93 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
                   type="submit"
                   className="flex-1 py-2.5 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs shadow-apple transition-all"
                 >
-                  إضافة التصنيف
+                  إضافة التصنيف وربطه بالشجرة
                 </button>
                 <button
                   type="button"
                   onClick={() => setShowAddCategoryModal(false)}
+                  className="px-4 py-2.5 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition-all"
+                >
+                  إلغاء
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* 13.1 MODAL: تعديل اسم التصنيف المحاسبي للمصروف */}
+      {/* ========================================================= */}
+      {showEditCategoryModal && editingCategoryAccount && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-100 animate-scaleUp">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
+              <div className="flex items-center gap-2">
+                <Edit3 className="w-5 h-5 text-amber-600" />
+                <div>
+                  <h3 className="text-sm font-black text-slate-900">تعديل اسم التصنيف المحاسبي</h3>
+                  <p className="text-[10px] text-slate-500">
+                    كود الحساب في شجرة الحسابات: <span className="font-mono font-bold text-slate-800">{editingCategoryAccount.code}</span>
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowEditCategoryModal(false)}
+                className="p-1 rounded-xl text-slate-400 hover:text-slate-600 transition-all"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleUpdateCategoryName} className="space-y-4">
+              <div className="p-3 rounded-2xl bg-amber-50/80 border border-amber-200 text-[11px] text-amber-900 leading-relaxed font-bold">
+                💡 <span className="text-amber-950 font-black">مرابطة وتكامل فوري:</span> عند حفظ هذا التعديل، سيتغير اسم الحساب فورياً في شجرة الحسابات والتقارير المالية ودفتر الأستاذ وقسم المالية دون الحاجة لإعادة تحميل الصفحة.
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  اسم التصنيف / الحساب الجديد *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={editedCategoryName}
+                  onChange={(e) => setEditedCategoryName(e.target.value)}
+                  placeholder="اكتب اسم الحساب الجديد..."
+                  className="w-full px-3.5 py-2.5 text-xs rounded-2xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-amber-500/20 font-bold"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">الوصف أو الملاحظات (اختياري)</label>
+                <input
+                  type="text"
+                  value={editedCategoryDesc}
+                  onChange={(e) => setEditedCategoryDesc(e.target.value)}
+                  placeholder="بيان الغرض من الحساب..."
+                  className="w-full px-3.5 py-2.5 text-xs rounded-2xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-amber-500/20"
+                />
+              </div>
+
+              <div className="pt-2 flex items-center gap-3">
+                <button
+                  type="submit"
+                  disabled={isEditingCategorySubmitting}
+                  className="flex-1 py-2.5 rounded-2xl bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-xs shadow-apple transition-all flex items-center justify-center gap-1.5"
+                >
+                  {isEditingCategorySubmitting ? (
+                    <span>جارٍ الحفظ...</span>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span>حفظ التعديل في شجرة الحسابات</span>
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowEditCategoryModal(false)}
                   className="px-4 py-2.5 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition-all"
                 >
                   إلغاء

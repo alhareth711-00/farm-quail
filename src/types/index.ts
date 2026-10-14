@@ -215,6 +215,7 @@ export interface BroodingWeeklyRate {
   defaultGramsPerChickDay: number; // جرام/طير/يوم
   recommendedTempC: string; // e.g. "35°C - 33°C"
   recommendedFeed: string; // e.g. "علف بادي 24-27%"
+  feedType?: FeedType; // نوع العلف المخصص (starter_24_27 أو grower_fattening)
 }
 
 export interface BroodingFeedScheduleSettings {
@@ -280,6 +281,7 @@ export const DEFAULT_BROODING_RATES: BroodingWeeklyRate[] = [
     defaultGramsPerChickDay: 6.5,
     recommendedTempC: '35°C - 33°C',
     recommendedFeed: 'علف بادي 24-27% بروتين',
+    feedType: 'starter_24_27',
   },
   {
     weekNumber: 2,
@@ -291,6 +293,7 @@ export const DEFAULT_BROODING_RATES: BroodingWeeklyRate[] = [
     defaultGramsPerChickDay: 12.0,
     recommendedTempC: '32°C - 30°C',
     recommendedFeed: 'علف بادي 24-27% بروتين',
+    feedType: 'starter_24_27',
   },
   {
     weekNumber: 3,
@@ -302,6 +305,7 @@ export const DEFAULT_BROODING_RATES: BroodingWeeklyRate[] = [
     defaultGramsPerChickDay: 16.5,
     recommendedTempC: '28°C - 26°C',
     recommendedFeed: 'علف بادي 24% بروتين',
+    feedType: 'starter_24_27',
   },
   {
     weekNumber: 4,
@@ -312,7 +316,8 @@ export const DEFAULT_BROODING_RATES: BroodingWeeklyRate[] = [
     phaseLabel: 'المرحلة 2: بطاريات تحضين أوسع',
     defaultGramsPerChickDay: 21.0,
     recommendedTempC: '24°C - 22°C (فطام حراري)',
-    recommendedFeed: 'علف بادي 24% أو نامي 20-22%',
+    recommendedFeed: 'علف بادي 24-27% بروتين',
+    feedType: 'starter_24_27',
   },
   {
     weekNumber: 5,
@@ -324,6 +329,7 @@ export const DEFAULT_BROODING_RATES: BroodingWeeklyRate[] = [
     defaultGramsPerChickDay: 25.0,
     recommendedTempC: 'حرارة العنبر الطبيعية (تجهيز الفرز)',
     recommendedFeed: 'علف نامي 20-22% بروتين',
+    feedType: 'grower_fattening',
   },
 ];
 

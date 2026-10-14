@@ -19,9 +19,15 @@ import {
   getIncomeStatementReport,
   performYearEndClosing,
   getYearEndClosingHistory,
+  createAccount,
+  updateAccount,
+  deleteAccount,
+  recalculateAllAccountBalances,
+  getBalanceSheetReport,
   type AccountLedgerReport,
   type CustomerLedgerReport,
   type IncomeStatementReport,
+  type BalanceSheetReport,
 } from '../../services/accountingService';
 import {
   Scale,
@@ -56,6 +62,9 @@ import {
   ArrowUpRight,
   Sparkles,
   Info,
+  Edit3,
+  Landmark,
+  Check,
 } from 'lucide-react';
 
 const accountTypeLabels: Record<
@@ -103,10 +112,11 @@ export const AccountingView: React.FC = () => {
   // 'income_statement' = قائمة الدخل
   // 'year_end_closing' = الإقفال السنوي
   // 'trial_balance' = ميزان المراجعة
+  // 'balance_sheet' = قائمة المركز المالي
   // 'accounts' = شجرة الحسابات
   // 'journal' = دفتر اليومية العامة
   const [activeTab, setActiveTab] = useState<
-    'ledger' | 'income_statement' | 'year_end_closing' | 'trial_balance' | 'accounts' | 'journal'
+    'ledger' | 'income_statement' | 'balance_sheet' | 'year_end_closing' | 'trial_balance' | 'accounts' | 'journal'
   >('ledger');
 
   // Live queries from Dexie database
@@ -206,6 +216,30 @@ export const AccountingView: React.FC = () => {
   }, [incStartDate, incEndDate, journalEntries]);
 
   // ---------------------------------------------------------------------------
+  // 2.1 STATE FOR BALANCE SHEET (قائمة المركز المالي)
+  // ---------------------------------------------------------------------------
+  const [balanceSheetDate, setBalanceSheetDate] = useState<string>(now.toISOString().split('T')[0]);
+  const [balanceSheetData, setBalanceSheetData] = useState<BalanceSheetReport | null>(null);
+  const [isBalanceSheetLoading, setIsBalanceSheetLoading] = useState<boolean>(false);
+
+  const loadBalanceSheet = async () => {
+    setIsBalanceSheetLoading(true);
+    try {
+      const rep = await getBalanceSheetReport(balanceSheetDate);
+      setBalanceSheetData(rep);
+    } catch (err: any) {
+      console.error('Balance sheet error:', err);
+      toast(err?.message || 'تعذر توليد قائمة المركز المالي', 'error');
+    } finally {
+      setIsBalanceSheetLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadBalanceSheet();
+  }, [balanceSheetDate, journalEntries, accounts]);
+
+  // ---------------------------------------------------------------------------
   // 3. STATE FOR YEAR-END CLOSING (الإقفال السنوي)
   // ---------------------------------------------------------------------------
   const [closingYear, setClosingYear] = useState<number>(now.getFullYear());
@@ -284,7 +318,34 @@ export const AccountingView: React.FC = () => {
   // ---------------------------------------------------------------------------
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTypeFilter, setSelectedTypeFilter] = useState<string>('all');
+  const [accountStatusFilter, setAccountStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
   const [journalFilterType, setJournalFilterType] = useState<string>('all');
+  const [isAuditingBalances, setIsAuditingBalances] = useState<boolean>(false);
+
+  // Add Account Modal State
+  const [showAddAccountModal, setShowAddAccountModal] = useState<boolean>(false);
+  const [newAccType, setNewAccType] = useState<AccountType>('asset');
+  const [newAccSubType, setNewAccSubType] = useState<string>('cash');
+  const [newAccCode, setNewAccCode] = useState<string>('');
+  const [newAccName, setNewAccName] = useState<string>('');
+  const [newAccNormalBalance, setNewAccNormalBalance] = useState<'debit' | 'credit'>('debit');
+  const [newAccOpeningBalance, setNewAccOpeningBalance] = useState<number | ''>('');
+  const [newAccDescription, setNewAccDescription] = useState<string>('');
+  const [isSubmittingAccount, setIsSubmittingAccount] = useState<boolean>(false);
+
+  // Edit Account Modal State
+  const [editingAccount, setEditingAccount] = useState<Account | null>(null);
+  const [editAccName, setEditAccName] = useState<string>('');
+  const [editAccCode, setEditAccCode] = useState<string>('');
+  const [editAccSubType, setEditAccSubType] = useState<string>('');
+  const [editAccDescription, setEditAccDescription] = useState<string>('');
+  const [editAccIsActive, setEditAccIsActive] = useState<boolean>(true);
+  const [editAccNormalBalance, setEditAccNormalBalance] = useState<'debit' | 'credit'>('debit');
+
+  // Delete Account Confirmation State
+  const [deletingAccount, setDeletingAccount] = useState<Account | null>(null);
+  const [deleteErrorReason, setDeleteErrorReason] = useState<string | null>(null);
+  const [isDeletingLoading, setIsDeletingLoading] = useState<boolean>(false);
 
   // Manual Journal Entry Modal State
   const [showAddEntryModal, setShowAddEntryModal] = useState(false);
@@ -296,6 +357,166 @@ export const AccountingView: React.FC = () => {
     { accountId: 'acc-10101', debit: '', credit: '', description: '' },
     { accountId: 'acc-40104', debit: '', credit: '', description: '' },
   ]);
+
+  const suggestNextAccountCode = (type: AccountType, currentAccounts?: Account[]): string => {
+    const prefixMap: Record<AccountType, string> = {
+      asset: '1',
+      liability: '2',
+      equity: '3',
+      revenue: '4',
+      expense: '5',
+    };
+    const prefix = prefixMap[type];
+    if (!currentAccounts || currentAccounts.length === 0) {
+      return `${prefix}0101`;
+    }
+    const matchingCodes = currentAccounts
+      .filter((a) => a.code.startsWith(prefix) && /^\d+$/.test(a.code))
+      .map((a) => parseInt(a.code, 10))
+      .sort((a, b) => b - a);
+
+    if (matchingCodes.length > 0) {
+      return (matchingCodes[0] + 1).toString();
+    }
+    return `${prefix}0101`;
+  };
+
+  const handleOpenAddAccount = () => {
+    const suggested = suggestNextAccountCode('asset', accounts);
+    setNewAccType('asset');
+    setNewAccSubType('cash');
+    setNewAccCode(suggested);
+    setNewAccName('');
+    setNewAccNormalBalance('debit');
+    setNewAccOpeningBalance('');
+    setNewAccDescription('');
+    setShowAddAccountModal(true);
+  };
+
+  const handleTypeSelectForNewAccount = (type: AccountType) => {
+    setNewAccType(type);
+    const suggested = suggestNextAccountCode(type, accounts);
+    setNewAccCode(suggested);
+    if (type === 'asset' || type === 'expense') {
+      setNewAccNormalBalance('debit');
+    } else {
+      setNewAccNormalBalance('credit');
+    }
+    if (type === 'asset') setNewAccSubType('cash');
+    else if (type === 'liability') setNewAccSubType('payable');
+    else if (type === 'equity') setNewAccSubType('capital');
+    else if (type === 'revenue') setNewAccSubType('sales');
+    else if (type === 'expense') setNewAccSubType('opex');
+  };
+
+  const handleSaveNewAccount = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newAccCode.trim()) {
+      toast('يرجى تحديد كود الحساب', 'warning');
+      return;
+    }
+    if (!newAccName.trim()) {
+      toast('يرجى كتابة اسم الحساب', 'warning');
+      return;
+    }
+
+    setIsSubmittingAccount(true);
+    try {
+      await createAccount({
+        code: newAccCode.trim(),
+        name: newAccName.trim(),
+        type: newAccType,
+        subType: newAccSubType,
+        normalBalance: newAccNormalBalance,
+        openingBalance: Number(newAccOpeningBalance) || 0,
+        description: newAccDescription.trim(),
+        currency: farmSettings.currency || 'YER',
+        createdBy: userName || 'المدير المالي',
+      });
+
+      toast(`تمت إضافة الحساب (${newAccName}) بنجاح!`, 'success');
+      setShowAddAccountModal(false);
+    } catch (err: any) {
+      console.error(err);
+      toast(err?.message || 'حدث خطأ أثناء إضافة الحساب', 'error');
+    } finally {
+      setIsSubmittingAccount(false);
+    }
+  };
+
+  const handleOpenEditAccount = (acc: Account) => {
+    setEditingAccount(acc);
+    setEditAccName(acc.name);
+    setEditAccCode(acc.code);
+    setEditAccSubType(acc.subType || '');
+    setEditAccDescription(acc.description || '');
+    setEditAccIsActive(acc.isActive !== false);
+    setEditAccNormalBalance(acc.normalBalance);
+  };
+
+  const handleSaveEditAccount = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingAccount) return;
+    if (!editAccName.trim()) {
+      toast('اسم الحساب مطلوب', 'warning');
+      return;
+    }
+
+    try {
+      await updateAccount(editingAccount.id, {
+        name: editAccName.trim(),
+        code: !editingAccount.isSystem ? editAccCode.trim() : undefined,
+        subType: editAccSubType,
+        description: editAccDescription.trim(),
+        isActive: editAccIsActive,
+        normalBalance: !editingAccount.isSystem ? editAccNormalBalance : undefined,
+      });
+
+      toast(`تم تحديث بيانات الحساب (${editAccName}) بنجاح!`, 'success');
+      setEditingAccount(null);
+    } catch (err: any) {
+      console.error(err);
+      toast(err?.message || 'تعذر تعديل الحساب', 'error');
+    }
+  };
+
+  const handleOpenDeleteAccount = (acc: Account) => {
+    setDeletingAccount(acc);
+    setDeleteErrorReason(null);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deletingAccount) return;
+    setIsDeletingLoading(true);
+    setDeleteErrorReason(null);
+    try {
+      await deleteAccount(deletingAccount.id);
+      toast(`تم حذف الحساب (${deletingAccount.name}) بنجاح`, 'success');
+      setDeletingAccount(null);
+    } catch (err: any) {
+      setDeleteErrorReason(err?.message || 'تعذر حذف الحساب');
+    } finally {
+      setIsDeletingLoading(false);
+    }
+  };
+
+  const handleAuditAndSyncBalances = async () => {
+    setIsAuditingBalances(true);
+    try {
+      const res = await recalculateAllAccountBalances();
+      toast(`تمت مطابقة وتدقيق أرصدة (${res.updatedCount}) حساباً بنجاح ومطابقتها 100% مع قيود اليومية!`, 'success');
+    } catch (err: any) {
+      toast(err?.message || 'حدث خطأ أثناء مطابقة الأرصدة', 'error');
+    } finally {
+      setIsAuditingBalances(false);
+    }
+  };
+
+  const handleViewAccountLedger = (acc: Account) => {
+    setLedgerTargetType('account');
+    setSelectedAccountId(acc.id);
+    setActiveTab('ledger');
+  };
 
   // Handle restoring / re-seeding chart of accounts
   const handleResetAccounts = async () => {
@@ -315,6 +536,8 @@ export const AccountingView: React.FC = () => {
     if (!accounts) return [];
     return accounts.filter((acc) => {
       if (selectedTypeFilter !== 'all' && acc.type !== selectedTypeFilter) return false;
+      if (accountStatusFilter === 'active' && acc.isActive === false) return false;
+      if (accountStatusFilter === 'inactive' && acc.isActive !== false) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase().trim();
         const matchName = acc.name.toLowerCase().includes(q);
@@ -323,7 +546,7 @@ export const AccountingView: React.FC = () => {
       }
       return true;
     });
-  }, [accounts, selectedTypeFilter, searchQuery]);
+  }, [accounts, selectedTypeFilter, accountStatusFilter, searchQuery]);
 
   // Filtered journal entries
   const filteredEntries = useMemo(() => {
@@ -516,6 +739,15 @@ export const AccountingView: React.FC = () => {
             )}
           </div>
 
+          {/* Quick Add Account Button */}
+          <button
+            onClick={handleOpenAddAccount}
+            className="px-3.5 py-2 rounded-2xl bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-700 hover:to-purple-700 text-white font-extrabold text-xs flex items-center gap-1.5 shadow-apple transition-all"
+          >
+            <Plus className="w-4 h-4 stroke-[3]" />
+            <span>+ إضافة حساب</span>
+          </button>
+
           {/* Quick Manual Entry Button */}
           <button
             onClick={() => setShowAddEntryModal(true)}
@@ -551,6 +783,18 @@ export const AccountingView: React.FC = () => {
         >
           <TrendingUp className="w-4 h-4" />
           <span>قائمة الدخل (Income Statement)</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('balance_sheet')}
+          className={`pb-3 px-4 text-xs font-extrabold flex items-center gap-2 border-b-2 transition-all shrink-0 ${
+            activeTab === 'balance_sheet'
+              ? 'border-teal-600 text-teal-700 bg-teal-50/40 rounded-t-xl'
+              : 'border-transparent text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <Landmark className="w-4 h-4" />
+          <span>قائمة المركز المالي (Balance Sheet)</span>
         </button>
 
         <button
@@ -1191,6 +1435,269 @@ export const AccountingView: React.FC = () => {
       )}
 
       {/* ===================================================================== */}
+      {/* 2.1 TAB: قائمة المركز المالي / الميزانية العمومية (BALANCE SHEET) */}
+      {/* ===================================================================== */}
+      {activeTab === 'balance_sheet' && (
+        <div className="space-y-5 animate-fadeIn">
+          {/* Controls & Filter Bar */}
+          <div className="p-4 rounded-3xl bg-white border border-slate-200/80 shadow-sm flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <Calendar className="w-4 h-4 text-teal-600" />
+              <span className="text-xs font-black text-slate-700">تاريخ المركز المالي (حتى تاريخ):</span>
+              <input
+                type="date"
+                value={balanceSheetDate}
+                onChange={(e) => setBalanceSheetDate(e.target.value)}
+                className="py-1.5 px-3 text-xs font-mono font-bold rounded-2xl bg-slate-50 border border-slate-200 focus:outline-none"
+              />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={loadBalanceSheet}
+                className="px-3.5 py-1.5 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs flex items-center gap-1.5 transition-all"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isBalanceSheetLoading ? 'animate-spin' : ''}`} />
+                <span>تحديث الميزانية</span>
+              </button>
+              <button
+                onClick={() => window.print()}
+                className="px-3.5 py-1.5 rounded-2xl bg-teal-50 hover:bg-teal-100 text-teal-800 font-bold text-xs flex items-center gap-1.5 transition-all"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                <span>طباعة المركز المالي</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Golden Accounting Equation Banner */}
+          {balanceSheetData && (
+            <div
+              className={`p-5 rounded-3xl border flex flex-col md:flex-row items-start md:items-center justify-between gap-4 ${
+                balanceSheetData.isBalanced
+                  ? 'bg-gradient-to-r from-emerald-500/10 via-teal-500/10 to-blue-500/10 border-teal-200'
+                  : 'bg-rose-50 border-rose-300'
+              }`}
+            >
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 font-black text-sm">
+                  {balanceSheetData.isBalanced ? (
+                    <>
+                      <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                      <span className="text-emerald-900">المعادلة المحاسبية الذهبية متوازنة تماماً 100%</span>
+                    </>
+                  ) : (
+                    <>
+                      <AlertTriangle className="w-5 h-5 text-rose-600" />
+                      <span className="text-rose-900">تنبيه: عدم توازن في الميزانية العمومية (الفارق: {balanceSheetData.difference.toLocaleString('ar-SA')} {farmSettings.currency})</span>
+                    </>
+                  )}
+                </div>
+                <p className="text-xs text-slate-600 font-medium">
+                  الأصول ({balanceSheetData.assets.totalAssets.toLocaleString('ar-SA')}) = الخصوم ({balanceSheetData.liabilities.totalLiabilities.toLocaleString('ar-SA')}) + حقوق الملكية ({balanceSheetData.equity.totalEquity.toLocaleString('ar-SA')}) {farmSettings.currency}
+                </p>
+              </div>
+
+              <div className="flex items-center gap-4 bg-white/80 backdrop-blur-sm p-3 rounded-2xl border border-slate-200/60 shadow-sm">
+                <div className="text-center px-2">
+                  <div className="text-[10px] text-slate-400 font-bold">إجمالي الأصول</div>
+                  <div className="font-mono font-black text-sm text-teal-700">
+                    {balanceSheetData.assets.totalAssets.toLocaleString('ar-SA')}
+                  </div>
+                </div>
+                <div className="font-black text-slate-300 text-sm">=</div>
+                <div className="text-center px-2">
+                  <div className="text-[10px] text-slate-400 font-bold">إجمالي الخصوم + الملكية</div>
+                  <div className="font-mono font-black text-sm text-indigo-700">
+                    {balanceSheetData.totalLiabilitiesAndEquity.toLocaleString('ar-SA')}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Two-Column Balance Sheet Statement */}
+          {balanceSheetData && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+              {/* RIGHT: الأصول (ASSETS) */}
+              <div className="p-5 rounded-3xl bg-white border border-slate-200/80 shadow-sm space-y-4">
+                <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                  <h3 className="font-black text-sm text-teal-900 flex items-center gap-2">
+                    <Building2 className="w-4 h-4 text-teal-600" />
+                    <span>الأصول والموجودات (Assets)</span>
+                  </h3>
+                  <span className="font-mono font-black text-sm text-teal-700">
+                    {balanceSheetData.assets.totalAssets.toLocaleString('ar-SA')} {farmSettings.currency}
+                  </span>
+                </div>
+
+                {/* الأصول المتداولة */}
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center text-xs font-black text-slate-700 bg-slate-50 p-2 rounded-xl">
+                    <span>1. الأصول المتداولة (Current Assets)</span>
+                    <span className="font-mono font-bold text-teal-800">
+                      {balanceSheetData.assets.totalCurrentAssets.toLocaleString('ar-SA')}
+                    </span>
+                  </div>
+                  <div className="divide-y divide-slate-100 pr-2">
+                    {balanceSheetData.assets.currentAssets.map((item) => (
+                      <div key={item.code} className="py-2 flex items-center justify-between text-xs hover:bg-slate-50/50 px-2 rounded-lg">
+                        <div>
+                          <span className="font-mono font-bold text-slate-500 ml-2">{item.code}</span>
+                          <span className="font-bold text-slate-800">{item.name}</span>
+                        </div>
+                        <span className="font-mono font-black text-slate-900">
+                          {item.balance.toLocaleString('ar-SA')}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* الأصول الثابتة */}
+                <div className="space-y-2 pt-2">
+                  <div className="flex justify-between items-center text-xs font-black text-slate-700 bg-slate-50 p-2 rounded-xl">
+                    <span>2. الأصول الثابتة والمعدات (Fixed Assets)</span>
+                    <span className="font-mono font-bold text-teal-800">
+                      {balanceSheetData.assets.totalFixedAssets.toLocaleString('ar-SA')}
+                    </span>
+                  </div>
+                  {balanceSheetData.assets.fixedAssets.length === 0 ? (
+                    <div className="text-[11px] text-slate-400 py-2 pr-4 italic">
+                      لا توجد أصول ثابتة مسجلة حالياً
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-slate-100 pr-2">
+                      {balanceSheetData.assets.fixedAssets.map((item) => (
+                        <div key={item.code} className="py-2 flex items-center justify-between text-xs hover:bg-slate-50/50 px-2 rounded-lg">
+                          <div>
+                            <span className="font-mono font-bold text-slate-500 ml-2">{item.code}</span>
+                            <span className="font-bold text-slate-800">{item.name}</span>
+                          </div>
+                          <span className="font-mono font-black text-slate-900">
+                            {item.balance.toLocaleString('ar-SA')}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="p-3 rounded-2xl bg-teal-50/70 border border-teal-200 flex items-center justify-between font-black text-xs text-teal-900">
+                  <span>مجموع الأصول (Total Assets)</span>
+                  <span className="font-mono text-sm">
+                    {balanceSheetData.assets.totalAssets.toLocaleString('ar-SA')} {farmSettings.currency}
+                  </span>
+                </div>
+              </div>
+
+              {/* LEFT: الخصوم وحقوق الملكية (LIABILITIES & EQUITY) */}
+              <div className="p-5 rounded-3xl bg-white border border-slate-200/80 shadow-sm space-y-4">
+                <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                  <h3 className="font-black text-sm text-indigo-900 flex items-center gap-2">
+                    <Scale className="w-4 h-4 text-indigo-600" />
+                    <span>الخصوم وحقوق الملكية (Liabilities & Equity)</span>
+                  </h3>
+                  <span className="font-mono font-black text-sm text-indigo-700">
+                    {balanceSheetData.totalLiabilitiesAndEquity.toLocaleString('ar-SA')} {farmSettings.currency}
+                  </span>
+                </div>
+
+                {/* 1. الخصوم والالتزامات */}
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center text-xs font-black text-rose-800 bg-rose-50/80 p-2 rounded-xl">
+                    <span>1. الخصوم والالتزامات (Liabilities)</span>
+                    <span className="font-mono font-bold text-rose-900">
+                      {balanceSheetData.liabilities.totalLiabilities.toLocaleString('ar-SA')}
+                    </span>
+                  </div>
+                  <div className="divide-y divide-slate-100 pr-2">
+                    {balanceSheetData.liabilities.currentLiabilities.map((item) => (
+                      <div key={item.code} className="py-2 flex items-center justify-between text-xs hover:bg-slate-50/50 px-2 rounded-lg">
+                        <div>
+                          <span className="font-mono font-bold text-slate-500 ml-2">{item.code}</span>
+                          <span className="font-bold text-slate-800">{item.name}</span>
+                        </div>
+                        <span className="font-mono font-black text-rose-700">
+                          {item.balance.toLocaleString('ar-SA')}
+                        </span>
+                      </div>
+                    ))}
+                    {balanceSheetData.liabilities.currentLiabilities.length === 0 && (
+                      <div className="text-[11px] text-slate-400 py-2 pr-4 italic">
+                        لا توجد التزامات مستحقة مسجلة
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* 2. حقوق الملكية */}
+                <div className="space-y-2 pt-2">
+                  <div className="flex justify-between items-center text-xs font-black text-blue-800 bg-blue-50/80 p-2 rounded-xl">
+                    <span>2. حقوق الملكية (Equity)</span>
+                    <span className="font-mono font-bold text-blue-900">
+                      {balanceSheetData.equity.totalEquity.toLocaleString('ar-SA')}
+                    </span>
+                  </div>
+                  <div className="divide-y divide-slate-100 pr-2">
+                    {/* رأس المال */}
+                    {balanceSheetData.equity.capital.map((item) => (
+                      <div key={item.code} className="py-2 flex items-center justify-between text-xs hover:bg-slate-50/50 px-2 rounded-lg">
+                        <div>
+                          <span className="font-mono font-bold text-slate-500 ml-2">{item.code}</span>
+                          <span className="font-bold text-slate-800">{item.name}</span>
+                        </div>
+                        <span className="font-mono font-black text-slate-900">
+                          {item.balance.toLocaleString('ar-SA')}
+                        </span>
+                      </div>
+                    ))}
+
+                    {/* الأرباح المحتجزة / المدورة */}
+                    {balanceSheetData.equity.retainedEarnings.map((item) => (
+                      <div key={item.code} className="py-2 flex items-center justify-between text-xs hover:bg-slate-50/50 px-2 rounded-lg">
+                        <div>
+                          <span className="font-mono font-bold text-slate-500 ml-2">{item.code}</span>
+                          <span className="font-bold text-slate-800">{item.name}</span>
+                        </div>
+                        <span className="font-mono font-black text-slate-900">
+                          {item.balance.toLocaleString('ar-SA')}
+                        </span>
+                      </div>
+                    ))}
+
+                    {/* أرباح/خسائر الفترة الحالية غير المقفلة */}
+                    <div className="py-2 flex items-center justify-between text-xs hover:bg-slate-50/50 px-2 rounded-lg">
+                      <div>
+                        <span className="font-mono font-bold text-indigo-500 ml-2">P&L</span>
+                        <span className="font-bold text-indigo-900">
+                          صافي أرباح/خسائر الفترة الجارية (غير المقفلة)
+                        </span>
+                      </div>
+                      <span
+                        className={`font-mono font-black ${
+                          balanceSheetData.equity.unclosedNetIncome >= 0 ? 'text-emerald-700' : 'text-rose-700'
+                        }`}
+                      >
+                        {balanceSheetData.equity.unclosedNetIncome.toLocaleString('ar-SA')}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-3 rounded-2xl bg-indigo-50/70 border border-indigo-200 flex items-center justify-between font-black text-xs text-indigo-900">
+                  <span>مجموع الخصوم وحقوق الملكية (Total Liabilities & Equity)</span>
+                  <span className="font-mono text-sm">
+                    {balanceSheetData.totalLiabilitiesAndEquity.toLocaleString('ar-SA')} {farmSettings.currency}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ===================================================================== */}
       {/* 3. TAB: الإقفال السنوي (YEAR-END CLOSING) */}
       {/* ===================================================================== */}
       {activeTab === 'year_end_closing' && (
@@ -1469,9 +1976,9 @@ export const AccountingView: React.FC = () => {
       {activeTab === 'accounts' && (
         <div className="space-y-4 animate-fadeIn">
           {/* Controls Bar */}
-          <div className="p-4 rounded-3xl bg-white border border-slate-200/80 shadow-sm flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-            <div className="flex flex-1 items-center gap-3">
-              <div className="relative flex-1 max-w-md">
+          <div className="p-4 rounded-3xl bg-white border border-slate-200/80 shadow-sm flex flex-col xl:flex-row items-stretch xl:items-center justify-between gap-3">
+            <div className="flex flex-1 flex-wrap items-center gap-3">
+              <div className="relative flex-1 min-w-[200px] max-w-md">
                 <Search className="w-4 h-4 text-slate-400 absolute right-3.5 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
@@ -1482,27 +1989,61 @@ export const AccountingView: React.FC = () => {
                 />
               </div>
 
+              {/* Type Filter */}
               <select
                 value={selectedTypeFilter}
                 onChange={(e) => setSelectedTypeFilter(e.target.value)}
-                className="py-2 px-3 text-xs rounded-2xl bg-slate-50 border border-slate-200 focus:outline-none"
+                className="py-2 px-3 text-xs rounded-2xl bg-slate-50 border border-slate-200 focus:outline-none font-bold"
               >
-                <option value="all">كل الأنواع</option>
-                <option value="asset">الأصول</option>
-                <option value="liability">الخصوم</option>
-                <option value="equity">حقوق الملكية</option>
-                <option value="revenue">الإيرادات</option>
-                <option value="expense">المصروفات</option>
+                <option value="all">كل الأنواع المحاسبية</option>
+                <option value="asset">1. الأصول (Assets)</option>
+                <option value="liability">2. الخصوم (Liabilities)</option>
+                <option value="equity">3. حقوق الملكية (Equity)</option>
+                <option value="revenue">4. الإيرادات (Revenues)</option>
+                <option value="expense">5. المصروفات (Expenses)</option>
+              </select>
+
+              {/* Status Filter */}
+              <select
+                value={accountStatusFilter}
+                onChange={(e) => setAccountStatusFilter(e.target.value as any)}
+                className="py-2 px-3 text-xs rounded-2xl bg-slate-50 border border-slate-200 focus:outline-none font-bold"
+              >
+                <option value="all">كل الحالات (نشط ومعطل)</option>
+                <option value="active">الحسابات النشطة فقط</option>
+                <option value="inactive">الحسابات المعطلة فقط</option>
               </select>
             </div>
 
-            <button
-              onClick={handleResetAccounts}
-              className="px-3.5 py-2 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold text-xs flex items-center justify-center gap-1.5 transition-all"
-            >
-              <RefreshCw className="w-4 h-4 text-slate-500" />
-              <span>إعادة تهيئة الشجرة</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleAuditAndSyncBalances}
+                disabled={isAuditingBalances}
+                title="تدقيق ومطابقة أرصدة كافة الحسابات مع قيود اليومية"
+                className="px-3.5 py-2 rounded-2xl bg-blue-50 hover:bg-blue-100 text-blue-700 font-extrabold text-xs flex items-center justify-center gap-1.5 transition-all"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isAuditingBalances ? 'animate-spin' : ''}`} />
+                <span>مطابقة الأرصدة</span>
+              </button>
+
+              <button
+                onClick={handleResetAccounts}
+                title="إعادة ضبط الحسابات النظامية الافتراضية"
+                className="px-3.5 py-2 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold text-xs flex items-center justify-center gap-1.5 transition-all"
+              >
+                <RefreshCw className="w-3.5 h-3.5 text-slate-500" />
+                <span>إعادة تهيئة</span>
+              </button>
+
+              {/* Add Account Button */}
+              <button
+                onClick={handleOpenAddAccount}
+                className="px-4 py-2 rounded-2xl bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-700 hover:to-purple-700 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 shadow-apple transition-all"
+              >
+                <Plus className="w-4 h-4 stroke-[3]" />
+                <span>+ إضافة حساب جديد</span>
+              </button>
+            </div>
           </div>
 
           {/* Accounts Table */}
@@ -1515,15 +2056,43 @@ export const AccountingView: React.FC = () => {
                     <th className="py-3 px-4">اسم الحساب</th>
                     <th className="py-3 px-4">النوع</th>
                     <th className="py-3 px-4">الطبيعة المحاسبية</th>
+                    <th className="py-3 px-4">الحالة</th>
                     <th className="py-3 px-4 text-left">الرصيد الحالي</th>
                     <th className="py-3 px-4">الوصف</th>
+                    <th className="py-3 px-4 text-center">الإجراءات</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {filteredAccounts.map((acc) => (
-                    <tr key={acc.id} className="hover:bg-slate-50/50">
-                      <td className="py-3 px-4 font-mono font-bold text-slate-800">{acc.code}</td>
-                      <td className="py-3 px-4 font-bold text-slate-900">{acc.name}</td>
+                    <tr
+                      key={acc.id}
+                      className={`hover:bg-slate-50/50 transition-colors ${
+                        acc.isActive === false ? 'opacity-60 bg-slate-50/30' : ''
+                      }`}
+                    >
+                      <td className="py-3 px-4 font-mono font-bold text-slate-800">
+                        {acc.code}
+                      </td>
+                      <td className="py-3 px-4">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-bold text-slate-900">{acc.name}</span>
+                          {acc.isSystem ? (
+                            <span
+                              title="حساب نظامي أساسي معتمد من النظام"
+                              className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-50 text-amber-700 border border-amber-200"
+                            >
+                              نظامي
+                            </span>
+                          ) : (
+                            <span
+                              title="حساب مخصص أضافه المستخدم"
+                              className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-purple-50 text-purple-700 border border-purple-200"
+                            >
+                              مخصص
+                            </span>
+                          )}
+                        </div>
+                      </td>
                       <td className="py-3 px-4">
                         <span
                           className={`px-2 py-0.5 rounded-lg text-[10px] font-extrabold border ${
@@ -1536,15 +2105,73 @@ export const AccountingView: React.FC = () => {
                       <td className="py-3 px-4 font-medium text-slate-500">
                         {acc.normalBalance === 'debit' ? 'مدين (Debit)' : 'دائن (Credit)'}
                       </td>
+                      <td className="py-3 px-4">
+                        {acc.isActive === false ? (
+                          <span className="px-2 py-0.5 rounded-lg text-[10px] font-extrabold bg-rose-50 text-rose-700 border border-rose-200">
+                            معطل
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-lg text-[10px] font-extrabold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                            نشط
+                          </span>
+                        )}
+                      </td>
                       <td className="py-3 px-4 text-left font-mono font-black text-slate-900">
-                        {acc.currentBalance.toLocaleString('ar-SA')}{' '}
+                        <span className={acc.currentBalance < 0 ? 'text-rose-600' : 'text-slate-900'}>
+                          {acc.currentBalance.toLocaleString('ar-SA')}
+                        </span>{' '}
                         <span className="text-[10px] text-slate-400 font-sans">{farmSettings.currency}</span>
                       </td>
                       <td className="py-3 px-4 text-slate-500 text-[11px] max-w-xs truncate">
                         {acc.description || '-'}
                       </td>
+                      <td className="py-3 px-4">
+                        <div className="flex items-center justify-center gap-1">
+                          {/* Quick Statement / Ledger */}
+                          <button
+                            onClick={() => handleViewAccountLedger(acc)}
+                            title="عرض كشف حساب الأستاذ العام"
+                            className="p-1.5 rounded-xl bg-slate-100 hover:bg-indigo-50 text-slate-600 hover:text-indigo-600 transition-colors"
+                          >
+                            <BookOpen className="w-3.5 h-3.5" />
+                          </button>
+
+                          {/* Edit Account */}
+                          <button
+                            onClick={() => handleOpenEditAccount(acc)}
+                            title="تعديل بيانات الحساب"
+                            className="p-1.5 rounded-xl bg-slate-100 hover:bg-violet-50 text-slate-600 hover:text-violet-600 transition-colors"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
+
+                          {/* Delete Account */}
+                          <button
+                            onClick={() => handleOpenDeleteAccount(acc)}
+                            title={
+                              acc.isSystem
+                                ? 'حساب نظامي محمي لا يمكن حذفه'
+                                : 'حذف الحساب'
+                            }
+                            className={`p-1.5 rounded-xl transition-colors ${
+                              acc.isSystem
+                                ? 'bg-slate-50 text-slate-300 cursor-not-allowed'
+                                : 'bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-600'
+                            }`}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </td>
                     </tr>
                   ))}
+                  {filteredAccounts.length === 0 && (
+                    <tr>
+                      <td colSpan={8} className="py-12 text-center text-slate-400 text-xs">
+                        لا توجد حسابات مطابقة للبحث أو الفلتر المحدد
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
@@ -1907,6 +2534,391 @@ export const AccountingView: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* MODAL: إضافة حساب مالي جديد (ADD ACCOUNT MODAL) */}
+      {/* ===================================================================== */}
+      {showAddAccountModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-3xl p-6 w-full max-w-lg shadow-2xl border border-slate-100 space-y-5 max-h-[90vh] overflow-y-auto">
+            {/* Header */}
+            <div className="flex justify-between items-center pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-2xl bg-violet-50 text-violet-600">
+                  <Plus className="w-5 h-5 stroke-[3]" />
+                </div>
+                <div>
+                  <h3 className="font-black text-sm text-slate-900">إضافة حساب مالي جديد</h3>
+                  <p className="text-[11px] text-slate-500">إدراج حساب جديد في شجرة الحسابات المحاسبية</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowAddAccountModal(false)}
+                className="p-1.5 rounded-xl text-slate-400 hover:bg-slate-100 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveNewAccount} className="space-y-4">
+              {/* Account Type Selector */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                  نوع الحساب الأساسي *
+                </label>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {(
+                    [
+                      { type: 'asset', label: '1. أصول (Asset)' },
+                      { type: 'liability', label: '2. خصوم (Liability)' },
+                      { type: 'equity', label: '3. حقوق ملكية (Equity)' },
+                      { type: 'revenue', label: '4. إيرادات (Revenue)' },
+                      { type: 'expense', label: '5. مصروفات (Expense)' },
+                    ] as const
+                  ).map((item) => (
+                    <button
+                      key={item.type}
+                      type="button"
+                      onClick={() => handleTypeSelectForNewAccount(item.type)}
+                      className={`p-2.5 rounded-2xl text-xs font-black border text-center transition-all ${
+                        newAccType === item.type
+                          ? 'bg-violet-600 text-white border-violet-600 shadow-sm'
+                          : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
+                      }`}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Code & Name */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    كود الحساب (رقم فريد) *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={newAccCode}
+                    onChange={(e) => setNewAccCode(e.target.value)}
+                    placeholder="مثال: 10106"
+                    className="w-full py-2 px-3 text-xs font-mono font-bold rounded-2xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-violet-500/20"
+                  />
+                  <span className="text-[10px] text-slate-400">يقترح النظام الكود التالي المتاح تلقائياً</span>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    اسم الحساب *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={newAccName}
+                    onChange={(e) => setNewAccName(e.target.value)}
+                    placeholder="مثال: محفظة ون كاش، بنك التضامن..."
+                    className="w-full py-2 px-3 text-xs font-bold rounded-2xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-violet-500/20"
+                  />
+                </div>
+              </div>
+
+              {/* SubType & Normal Balance */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    التصنيف الفرعي
+                  </label>
+                  <input
+                    type="text"
+                    value={newAccSubType}
+                    onChange={(e) => setNewAccSubType(e.target.value)}
+                    placeholder="مثال: bank_wallet, cash, opex..."
+                    className="w-full py-2 px-3 text-xs rounded-2xl bg-slate-50 border border-slate-200 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    الطبيعة المحاسبية *
+                  </label>
+                  <select
+                    value={newAccNormalBalance}
+                    onChange={(e) => setNewAccNormalBalance(e.target.value as 'debit' | 'credit')}
+                    className="w-full py-2 px-3 text-xs font-bold rounded-2xl bg-slate-50 border border-slate-200 focus:outline-none"
+                  >
+                    <option value="debit">مدين (Debit) - للأصول والمصروفات</option>
+                    <option value="credit">دائن (Credit) - للخصوم والإيرادات والملكية</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Optional Opening Balance */}
+              <div className="p-3.5 rounded-2xl bg-amber-50/70 border border-amber-200/80 space-y-2">
+                <div className="flex items-center gap-1.5 text-xs font-black text-amber-900">
+                  <Coins className="w-4 h-4 text-amber-600" />
+                  <span>الرصيد الافتتاحي (Opening Balance) - اختياري</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    value={newAccOpeningBalance}
+                    onChange={(e) =>
+                      setNewAccOpeningBalance(e.target.value === '' ? '' : Number(e.target.value))
+                    }
+                    placeholder="0.00"
+                    className="flex-1 py-1.5 px-3 text-xs font-mono font-bold rounded-xl bg-white border border-amber-300 focus:outline-none"
+                  />
+                  <span className="text-xs font-bold text-amber-800">{farmSettings.currency}</span>
+                </div>
+                <p className="text-[10px] text-amber-700">
+                  💡 سيقوم النظام تلقائياً بإنشاء قيد افتتاحي متوازن مقابل حساب رأس المال (30101) لحماية توازن ميزان المراجعة.
+                </p>
+              </div>
+
+              {/* Description */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  بيان أو وصف الحساب (ملاحظات)
+                </label>
+                <textarea
+                  value={newAccDescription}
+                  onChange={(e) => setNewAccDescription(e.target.value)}
+                  rows={2}
+                  placeholder="ملاحظات حول طبيعة واستخدام الحساب..."
+                  className="w-full py-2 px-3 text-xs rounded-2xl bg-slate-50 border border-slate-200 focus:outline-none"
+                />
+              </div>
+
+              {/* Buttons */}
+              <div className="pt-2 flex items-center gap-3">
+                <button
+                  type="submit"
+                  disabled={isSubmittingAccount}
+                  className="flex-1 py-2.5 rounded-2xl bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-700 hover:to-purple-700 text-white font-black text-xs shadow-apple transition-all disabled:opacity-50"
+                >
+                  {isSubmittingAccount ? 'جارٍ إضافة الحساب...' : 'حفظ وإضافة الحساب'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowAddAccountModal(false)}
+                  className="px-4 py-2.5 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs"
+                >
+                  إلغاء
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* MODAL: تعديل الحساب (EDIT ACCOUNT MODAL) */}
+      {/* ===================================================================== */}
+      {editingAccount && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-3xl p-6 w-full max-w-lg shadow-2xl border border-slate-100 space-y-5 max-h-[90vh] overflow-y-auto">
+            {/* Header */}
+            <div className="flex justify-between items-center pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-2xl bg-violet-50 text-violet-600">
+                  <Edit3 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-black text-sm text-slate-900">تعديل بيانات الحساب</h3>
+                  <p className="text-[11px] text-slate-500">كود الحساب: {editingAccount.code}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setEditingAccount(null)}
+                className="p-1.5 rounded-xl text-slate-400 hover:bg-slate-100 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* System Account Alert */}
+            {editingAccount.isSystem && (
+              <div className="p-3 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start gap-2 font-medium">
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <span>
+                  هذا حساب نظامي أساسي (System Account) مرتبط آلياً بعمليات النظام (المبيعات، المشتريات، الصندوق). كوده البرمجي وطبيعته محميان، لكن يمكنك تعديل اسمه ووصفه وتفعيله.
+                </span>
+              </div>
+            )}
+
+            <form onSubmit={handleSaveEditAccount} className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    اسم الحساب *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={editAccName}
+                    onChange={(e) => setEditAccName(e.target.value)}
+                    className="w-full py-2 px-3 text-xs font-bold rounded-2xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-violet-500/20"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    كود الحساب {!editingAccount.isSystem ? '*' : '(محمي)'}
+                  </label>
+                  <input
+                    type="text"
+                    disabled={editingAccount.isSystem}
+                    value={editAccCode}
+                    onChange={(e) => setEditAccCode(e.target.value)}
+                    className={`w-full py-2 px-3 text-xs font-mono font-bold rounded-2xl border ${
+                      editingAccount.isSystem
+                        ? 'bg-slate-100 text-slate-500 border-slate-200 cursor-not-allowed'
+                        : 'bg-slate-50 text-slate-800 border-slate-200'
+                    }`}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    التصنيف الفرعي
+                  </label>
+                  <input
+                    type="text"
+                    value={editAccSubType}
+                    onChange={(e) => setEditAccSubType(e.target.value)}
+                    className="w-full py-2 px-3 text-xs rounded-2xl bg-slate-50 border border-slate-200 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    حالة الحساب *
+                  </label>
+                  <select
+                    value={editAccIsActive ? 'active' : 'inactive'}
+                    onChange={(e) => setEditAccIsActive(e.target.value === 'active')}
+                    className="w-full py-2 px-3 text-xs font-bold rounded-2xl bg-slate-50 border border-slate-200 focus:outline-none"
+                  >
+                    <option value="active">نشط (متاح للاستخدام والقيود)</option>
+                    <option value="inactive">معطل (إلغاء التنشيط / إيقاف)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  الوصف / البيان
+                </label>
+                <textarea
+                  value={editAccDescription}
+                  onChange={(e) => setEditAccDescription(e.target.value)}
+                  rows={2}
+                  className="w-full py-2 px-3 text-xs rounded-2xl bg-slate-50 border border-slate-200 focus:outline-none"
+                />
+              </div>
+
+              {/* Action Buttons */}
+              <div className="pt-2 flex items-center gap-3">
+                <button
+                  type="submit"
+                  className="flex-1 py-2.5 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs shadow-apple transition-all"
+                >
+                  حفظ التعديلات
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditingAccount(null)}
+                  className="px-4 py-2.5 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs"
+                >
+                  إلغاء
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* MODAL: حذف الحساب (DELETE ACCOUNT CONFIRMATION) */}
+      {/* ===================================================================== */}
+      {deletingAccount && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-3xl p-6 w-full max-w-md shadow-2xl border border-slate-100 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 rounded-2xl bg-rose-50 text-rose-600">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-black text-sm text-slate-900">تأكيد حذف الحساب</h3>
+                <p className="text-xs text-slate-500">
+                  {deletingAccount.code} - {deletingAccount.name}
+                </p>
+              </div>
+            </div>
+
+            {deleteErrorReason ? (
+              <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-xs text-rose-900 space-y-2">
+                <div className="font-black flex items-center gap-1.5">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>تعذر الحذف لسبب محاسبي:</span>
+                </div>
+                <p className="leading-relaxed">{deleteErrorReason}</p>
+                <div className="pt-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const acc = deletingAccount;
+                      setDeletingAccount(null);
+                      setDeleteErrorReason(null);
+                      handleOpenEditAccount(acc);
+                    }}
+                    className="text-xs font-black text-indigo-700 underline"
+                  >
+                    الانتقال لتعطيل الحساب بدلاً من حذفه
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <p className="text-xs text-slate-600 leading-relaxed">
+                هل أنت متأكد من رغبتك في حذف الحساب <span className="font-bold text-slate-900">"{deletingAccount.name}"</span>؟
+                <br />
+                سيقوم النظام بالتحقق أولاً من عدم وجود أي قيود محاسبية مسجلة عليه في دفتر اليومية ودفتر الأستاذ للحفاظ على ميزان المراجعة.
+              </p>
+            )}
+
+            <div className="pt-2 flex items-center gap-3">
+              {!deleteErrorReason && (
+                <button
+                  type="button"
+                  onClick={handleConfirmDelete}
+                  disabled={isDeletingLoading}
+                  className="flex-1 py-2.5 rounded-2xl bg-rose-600 hover:bg-rose-700 text-white font-black text-xs shadow-apple transition-all disabled:opacity-50"
+                >
+                  {isDeletingLoading ? 'جارٍ التحقق والحذف...' : 'نعم، حذف الحساب'}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setDeletingAccount(null);
+                  setDeleteErrorReason(null);
+                }}
+                className={`py-2.5 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs ${
+                  deleteErrorReason ? 'flex-1' : 'px-4'
+                }`}
+              >
+                {deleteErrorReason ? 'إغلاق' : 'إلغاء'}
+              </button>
+            </div>
           </div>
         </div>
       )}

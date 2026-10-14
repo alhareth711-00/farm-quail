@@ -253,21 +253,57 @@ export const DEFAULT_CHART_OF_ACCOUNTS: Omit<Account, 'currentBalance' | 'create
   {
     id: 'acc-50101',
     code: '50101',
-    name: 'مصروفات شراء واستخدام الأعلاف',
+    name: 'مصروفات شراء واستخدام العلف البدائي',
     type: 'expense',
-    subType: 'cogs',
+    subType: 'cogs_feed_starter',
     normalBalance: 'debit',
     currency: 'YER',
     isSystem: true,
     isActive: true,
-    description: 'تكلفة وتغذية قطعان السمان (بادي، نامي، بياض إنتاجي)',
+    description: 'تكلفة وتغذية قطعان السمان بالعلف البدائي (بادي ونامي للتحضين والتسمين)',
   },
   {
     id: 'acc-50102',
     code: '50102',
+    name: 'مصروفات شراء واستخدام العلف البياض',
+    type: 'expense',
+    subType: 'cogs_feed_layer',
+    normalBalance: 'debit',
+    currency: 'YER',
+    isSystem: true,
+    isActive: true,
+    description: 'تكلفة وتغذية قطيع السمان البياض المنتج لبيض المائدة والتفريخ',
+  },
+  {
+    id: 'acc-50103',
+    code: '50103',
+    name: 'مصروفات البترول - السيارة',
+    type: 'expense',
+    subType: 'petrol_car',
+    normalBalance: 'debit',
+    currency: 'YER',
+    isSystem: true,
+    isActive: true,
+    description: 'تكاليف بترول ومحروقات سيارة المزرعة للتوصيل والتوزيع والنقل العام',
+  },
+  {
+    id: 'acc-50104',
+    code: '50104',
+    name: 'مصروفات البترول - المتر',
+    type: 'expense',
+    subType: 'petrol_motor',
+    normalBalance: 'debit',
+    currency: 'YER',
+    isSystem: true,
+    isActive: true,
+    description: 'تكاليف بترول دراجات التوصيل النارية (المتر) للطلبات السريعة',
+  },
+  {
+    id: 'acc-50105',
+    code: '50105',
     name: 'مصروفات الأدوية واللقاحات البيطرية',
     type: 'expense',
-    subType: 'cogs',
+    subType: 'cogs_medication',
     normalBalance: 'debit',
     currency: 'YER',
     isSystem: true,
@@ -275,33 +311,21 @@ export const DEFAULT_CHART_OF_ACCOUNTS: Omit<Account, 'currentBalance' | 'create
     description: 'تكاليف الفيتامينات، المضادات، والمطهرات البيطرية',
   },
   {
-    id: 'acc-50103',
-    code: '50103',
-    name: 'مصروفات المحروقات وبترول التوصيل',
-    type: 'expense',
-    subType: 'opex',
-    normalBalance: 'debit',
-    currency: 'YER',
-    isSystem: true,
-    isActive: true,
-    description: 'تكاليف بترول دراجات التوصيل أو وقود مولدات المزرعة',
-  },
-  {
-    id: 'acc-50104',
-    code: '50104',
-    name: 'مصروفات رواتب وأجور العمال والموظفين',
+    id: 'acc-50106',
+    code: '50106',
+    name: 'مصروفات رواتب وأجور وسلفيات العمال',
     type: 'expense',
     subType: 'payroll',
     normalBalance: 'debit',
     currency: 'YER',
     isSystem: true,
     isActive: true,
-    description: 'الرواتب والأجور الشهرية واليوميات المصروفة',
+    description: 'الرواتب والأجور الشهرية واليوميات وسلفيات عمال المزرعة',
   },
   {
-    id: 'acc-50105',
-    code: '50105',
-    name: 'مصروفات صيانة الأقفاص والمعدات',
+    id: 'acc-50107',
+    code: '50107',
+    name: 'مصروفات صيانة العنابر والأقفاص والمعدات',
     type: 'expense',
     subType: 'maintenance',
     normalBalance: 'debit',
@@ -311,8 +335,8 @@ export const DEFAULT_CHART_OF_ACCOUNTS: Omit<Account, 'currentBalance' | 'create
     description: 'صيانة البطاريات، الشفاطات، وخلايا التبريد والمولدات',
   },
   {
-    id: 'acc-50106',
-    code: '50106',
+    id: 'acc-50108',
+    code: '50108',
     name: 'مصروفات كهرباء ومياه وتشغيل',
     type: 'expense',
     subType: 'utilities',
@@ -320,11 +344,35 @@ export const DEFAULT_CHART_OF_ACCOUNTS: Omit<Account, 'currentBalance' | 'create
     currency: 'YER',
     isSystem: true,
     isActive: true,
-    description: 'فواتير المياه، الكهرباء، والخدمات التشغيلية',
+    description: 'فواتير المياه، الكهرباء، والخدمات التشغيلية للمزرعة',
   },
   {
-    id: 'acc-50107',
-    code: '50107',
+    id: 'acc-50109',
+    code: '50109',
+    name: 'مصروفات التغليف والتعبئة (أطباق وكراتين)',
+    type: 'expense',
+    subType: 'packaging',
+    normalBalance: 'debit',
+    currency: 'YER',
+    isSystem: true,
+    isActive: true,
+    description: 'تكاليف أطباق البيض البلاستيكية والورقية، كراتين الشحن، ومواد التغليف',
+  },
+  {
+    id: 'acc-50110',
+    code: '50110',
+    name: 'مصروفات نشارة الخشب وفرشة العنابر',
+    type: 'expense',
+    subType: 'bedding',
+    normalBalance: 'debit',
+    currency: 'YER',
+    isSystem: true,
+    isActive: true,
+    description: 'تكاليف نشارة خشب العنابر وفرشة أرضيات التحضين والتربية',
+  },
+  {
+    id: 'acc-50111',
+    code: '50111',
     name: 'مصروفات إدارية ونثريات عامة',
     type: 'expense',
     subType: 'general',
@@ -333,18 +381,6 @@ export const DEFAULT_CHART_OF_ACCOUNTS: Omit<Account, 'currentBalance' | 'create
     isSystem: true,
     isActive: true,
     description: 'المصروفات النثرية والقرطاسية والمصروفات المتنوعة',
-  },
-  {
-    id: 'acc-50108',
-    code: '50108',
-    name: 'مصروفات نشارة الخشب ومستلزمات التعبئة والأطباق',
-    type: 'expense',
-    subType: 'packaging',
-    normalBalance: 'debit',
-    currency: 'YER',
-    isSystem: true,
-    isActive: true,
-    description: 'تكاليف نشارة خشب العنابر، كراتين البيض، والأطباق البلاستيكية والورقية',
   },
   {
     id: 'acc-50201',
@@ -366,7 +402,7 @@ export const DEFAULT_CHART_OF_ACCOUNTS: Omit<Account, 'currentBalance' | 'create
 export async function initializeChartOfAccounts(forceRefresh = false): Promise<Account[]> {
   const existingCount = await db.accounts.count();
 
-  if (existingCount === 0 || forceRefresh) {
+  if (existingCount === 0) {
     const nowIso = new Date().toISOString();
     const accountsToInsert: Account[] = DEFAULT_CHART_OF_ACCOUNTS.map((acc) => ({
       ...acc,
@@ -378,16 +414,50 @@ export async function initializeChartOfAccounts(forceRefresh = false): Promise<A
     return await db.accounts.toArray();
   }
 
-  // Ensure system accounts are not missing
+  // Ensure system accounts are synced & new accounts are added
   for (const def of DEFAULT_CHART_OF_ACCOUNTS) {
     const existing = await db.accounts.get(def.id);
     if (!existing) {
-      await db.accounts.put({
-        ...def,
-        currentBalance: 0,
-        createdAt: new Date().toISOString(),
-      });
+      const byCode = await db.accounts.where('code').equals(def.code).first();
+      if (!byCode) {
+        await db.accounts.put({
+          ...def,
+          currentBalance: 0,
+          createdAt: new Date().toISOString(),
+        });
+      }
+    } else {
+      // Sync names and properties for system accounts so existing DBs get the separated accounts and new names
+      if (forceRefresh) {
+        await db.accounts.update(def.id, {
+          name: def.name,
+          type: def.type,
+          subType: def.subType,
+          description: def.description,
+          normalBalance: def.normalBalance,
+          isSystem: true,
+        });
+      } else if (existing.isSystem) {
+        const legacyNames = [
+          'مصروفات شراء واستخدام الأعلاف',
+          'مصروفات المحروقات وبترول التوصيل',
+          'بترول ومحروقات التوصيل والمولد',
+          'مصروفات نشارة الخشب ومستلزمات التعبئة والأطباق',
+          'مصروفات صيانة الأقفاص والمعدات والعنابر',
+        ];
+        if (legacyNames.includes(existing.name)) {
+          await db.accounts.update(def.id, {
+            name: def.name,
+            subType: def.subType,
+            description: def.description,
+          });
+        }
+      }
     }
+  }
+
+  if (forceRefresh) {
+    await recalculateAllAccountBalances();
   }
 
   return await db.accounts.toArray();
@@ -487,6 +557,274 @@ export async function createJournalEntry(entryInput: {
   });
 
   return newEntry;
+}
+
+// =========================================================================
+// 2.1 إدارة شجرة الحسابات المحاسبية (Accounts CRUD & Balance Auditing)
+// =========================================================================
+
+export interface CreateAccountInput {
+  code: string;
+  name: string;
+  type: Account['type'];
+  subType?: string;
+  normalBalance?: Account['normalBalance'];
+  currency?: string;
+  description?: string;
+  openingBalance?: number;
+  openingBalanceDate?: string;
+  createdBy?: string;
+}
+
+export interface UpdateAccountInput {
+  name?: string;
+  code?: string;
+  subType?: string;
+  normalBalance?: Account['normalBalance'];
+  isActive?: boolean;
+  description?: string;
+}
+
+/**
+ * إضافة حساب جديد إلى شجرة الحسابات مع إمكانية إثبات رصيد افتتاحي بقيد متوازن
+ */
+export async function createAccount(input: CreateAccountInput): Promise<Account> {
+  const code = input.code.trim();
+  const name = input.name.trim();
+
+  if (!code) {
+    throw new Error('كود الحساب مطلوب ولا يمكن تركه فارغاً.');
+  }
+  if (!name) {
+    throw new Error('اسم الحساب مطلوب ولا يمكن تركه فارغاً.');
+  }
+
+  // التحقق من عدم تكرار الكود
+  const existingWithCode = await db.accounts.where('code').equals(code).first();
+  if (existingWithCode) {
+    throw new Error(`كود الحساب (${code}) مسجل مسبقاً لحساب "${existingWithCode.name}". يرجى اختيار كود آخر.`);
+  }
+
+  const defaultNormalBalance = input.type === 'asset' || input.type === 'expense' ? 'debit' : 'credit';
+  const normalBalance = input.normalBalance || defaultNormalBalance;
+  const accountId = `acc-${code}`;
+
+  const newAccount: Account = {
+    id: accountId,
+    code,
+    name,
+    type: input.type,
+    subType: input.subType || 'general',
+    normalBalance,
+    currentBalance: 0,
+    currency: input.currency || 'YER',
+    isSystem: false,
+    isActive: true,
+    description: input.description?.trim() || '',
+    createdAt: new Date().toISOString(),
+  };
+
+  await db.accounts.add(newAccount);
+
+  // إذا تم إدخال رصيد افتتاحي > 0 يتم توليد قيد يومية افتتاحي متوازن 100%
+  const openingBalance = Number(input.openingBalance) || 0;
+  if (openingBalance > 0) {
+    const entryDate = input.openingBalanceDate || new Date().toISOString().split('T')[0];
+    const capitalAcc = (await db.accounts.get('acc-30101')) || (await db.accounts.where('code').equals('30101').first());
+    const capitalId = capitalAcc ? capitalAcc.id : 'acc-30101';
+    const capitalCode = capitalAcc ? capitalAcc.code : '30101';
+    const capitalName = capitalAcc ? capitalAcc.name : 'رأس مال المزرعة';
+
+    const lines: Omit<JournalEntryLine, 'id'>[] = [];
+
+    if (normalBalance === 'debit') {
+      // حساب طبيعته مدين (صندوق، بنك، عملاء، مخزون، أصل)
+      // من حـ/ الحساب الجديد [مدين]
+      // إلى حـ/ رأس مال المزرعة [دائن]
+      lines.push({
+        accountId: newAccount.id,
+        accountCode: newAccount.code,
+        accountName: newAccount.name,
+        debit: openingBalance,
+        credit: 0,
+        description: `إثبات الرصيد الافتتاحي لحساب (${newAccount.name})`,
+      });
+      lines.push({
+        accountId: capitalId,
+        accountCode: capitalCode,
+        accountName: capitalName,
+        debit: 0,
+        credit: openingBalance,
+        description: `مقابل إثبات رصيد افتتاحي لحساب (${newAccount.name})`,
+      });
+    } else {
+      // حساب طبيعته دائن (مورد، التزام، شريك)
+      // من حـ/ رأس مال المزرعة [مدين]
+      // إلى حـ/ الحساب الجديد [دائن]
+      lines.push({
+        accountId: capitalId,
+        accountCode: capitalCode,
+        accountName: capitalName,
+        debit: openingBalance,
+        credit: 0,
+        description: `مقابل إثبات رصيد افتتاحي للالتزام (${newAccount.name})`,
+      });
+      lines.push({
+        accountId: newAccount.id,
+        accountCode: newAccount.code,
+        accountName: newAccount.name,
+        debit: 0,
+        credit: openingBalance,
+        description: `إثبات الرصيد الافتتاحي لحساب (${newAccount.name})`,
+      });
+    }
+
+    await createJournalEntry({
+      date: entryDate,
+      description: `قيد إثبات رصيد افتتاحي لحساب: ${newAccount.name} (${newAccount.code})`,
+      referenceType: 'manual_entry',
+      referenceNumber: `OPN-${newAccount.code}`,
+      lines,
+      createdBy: input.createdBy || 'محاسب النظام',
+    });
+  }
+
+  return (await db.accounts.get(accountId)) || newAccount;
+}
+
+/**
+ * تعديل بيانات حساب موجود في شجرة الحسابات
+ */
+export async function updateAccount(
+  accountId: string,
+  input: UpdateAccountInput
+): Promise<Account> {
+  const existing = await db.accounts.get(accountId);
+  if (!existing) {
+    throw new Error('الحساب المطلوب تعديله غير موجود في قاعدة البيانات.');
+  }
+
+  // عند تعديل الكود، التحقق من عدم التكرار وأنه ليس حساب نظامي
+  if (input.code && input.code.trim() !== existing.code) {
+    const trimmedCode = input.code.trim();
+    if (existing.isSystem) {
+      throw new Error(`الحساب (${existing.name}) هو حساب نظامي أساسي (System Account) محمي، لا يمكن تعديل كوده البرمجي منعاً لتعطل القيود الآلية.`);
+    }
+    const duplicate = await db.accounts.where('code').equals(trimmedCode).first();
+    if (duplicate && duplicate.id !== accountId) {
+      throw new Error(`كود الحساب (${trimmedCode}) مستخدم بالفعل لحساب "${duplicate.name}".`);
+    }
+    existing.code = trimmedCode;
+  }
+
+  if (input.name && input.name.trim()) {
+    existing.name = input.name.trim();
+  }
+
+  if (input.description !== undefined) {
+    existing.description = input.description.trim();
+  }
+
+  if (input.isActive !== undefined) {
+    existing.isActive = input.isActive;
+  }
+
+  if (input.subType) {
+    existing.subType = input.subType;
+  }
+
+  if (!existing.isSystem && input.normalBalance) {
+    existing.normalBalance = input.normalBalance;
+  }
+
+  await db.accounts.put(existing);
+  return existing;
+}
+
+/**
+ * حذف حساب من شجرة الحسابات مع فرض شروط الحماية المحاسبية الصارمة
+ */
+export async function deleteAccount(accountId: string): Promise<void> {
+  const existing = await db.accounts.get(accountId);
+  if (!existing) {
+    throw new Error('الحساب المراد حذفه غير موجود.');
+  }
+
+  // 1. حساب نظامي أساسي؟
+  if (existing.isSystem) {
+    throw new Error(
+      `لا يمكن حذف الحساب (${existing.name}) لأنه حساب نظامي أساسي (System Account) معتمد من قبل النظام لعمليات نقاط البيع والمخزون والمصروفات. يمكنك فقط تعديل اسمه أو وصفه.`
+    );
+  }
+
+  // 2. هل توجد قيود يومية مسجلة على هذا الحساب؟
+  const journalEntries = await db.journalEntries.toArray();
+  const matchedEntry = journalEntries.find((entry) =>
+    entry.lines?.some((l) => l.accountId === accountId || l.accountCode === existing.code)
+  );
+
+  if (matchedEntry) {
+    throw new Error(
+      `لا يمكن حذف الحساب (${existing.name}) لوجود حركات وقيود محاسبية مسجلة عليه (مثال: القيد رقم ${matchedEntry.entryNumber})! لحماية سلامة وتوازن ميزان المراجعة ودفتر الأستاذ، يجب "تعطيل الحساب" بدلاً من حذفه.`
+    );
+  }
+
+  // 3. هل الرصيد غير صفري؟
+  if (Math.abs(existing.currentBalance || 0) > 0.001) {
+    throw new Error(
+      `لا يمكن حذف الحساب لأن رصيده الحالي غير صفري (${existing.currentBalance}). يجب تصفية الرصيد بقيد تسوية أولاً.`
+    );
+  }
+
+  // الحذف آمن
+  await db.accounts.delete(accountId);
+}
+
+/**
+ * تدقيق وإعادة احتساب أرصدة كافة الحسابات من واقع قيود اليومية الفعلية
+ * Recalculate and Synchronize all account balances from posted journal entries
+ */
+export async function recalculateAllAccountBalances(): Promise<{ updatedCount: number }> {
+  const allAccounts = await db.accounts.toArray();
+  const allEntries = await db.journalEntries.toArray();
+
+  const balanceMap: Record<string, number> = {};
+  for (const acc of allAccounts) {
+    balanceMap[acc.id] = 0;
+  }
+
+  for (const entry of allEntries) {
+    if (entry.status === 'cancelled') continue;
+    if (!entry.lines) continue;
+
+    for (const line of entry.lines) {
+      const acc = allAccounts.find(
+        (a) => a.id === line.accountId || a.code === line.accountCode
+      );
+      if (acc) {
+        let delta = 0;
+        const debit = Number(line.debit) || 0;
+        const credit = Number(line.credit) || 0;
+
+        if (acc.normalBalance === 'debit') {
+          delta = debit - credit;
+        } else {
+          delta = credit - debit;
+        }
+
+        balanceMap[acc.id] = (balanceMap[acc.id] || 0) + delta;
+      }
+    }
+  }
+
+  await db.transaction('rw', db.accounts, async () => {
+    for (const acc of allAccounts) {
+      const newBal = balanceMap[acc.id] || 0;
+      await db.accounts.update(acc.id, { currentBalance: newBal });
+    }
+  });
+
+  return { updatedCount: allAccounts.length };
 }
 
 /**
@@ -649,7 +987,136 @@ export async function recordSaleJournalEntry(invoice: OrderInvoice): Promise<Jou
 }
 
 /**
- * 4. دالة تسجيل قيد مصروف آلي متوازن
+ * دالة مساعدة لتحديد حساب المصروف المناسب من شجرة الحسابات بدقة
+ * تدعم الفصل بين العلف البدائي والبياض، وبترول السيارة والمتر، والتغليف ونشارة الخشب، والتصنيفات المخصصة
+ */
+export function resolveExpenseAccount(
+  category: string,
+  description: string = '',
+  allAccounts: Account[] = []
+): { id: string; code: string; name: string } {
+  // 1. مطابقة مباشرة بالمعرف ID أو الكود أو الاسم
+  const direct = allAccounts.find(
+    (a) => a.id === category || a.code === category || a.name === category
+  );
+  if (direct) {
+    return { id: direct.id, code: direct.code, name: direct.name };
+  }
+
+  const byCode = (c: string) => allAccounts.find((a) => a.code === c);
+  const desc = (description || '').toLowerCase();
+  const cat = (category || '').toLowerCase();
+
+  // 2. الفصل الدقيق لحسابات الأعلاف (علف بدائي 50101 vs علف بياض 50102)
+  if (
+    cat === 'feed_purchase_layer' ||
+    cat === 'layer_feed' ||
+    cat === 'cogs_feed_layer' ||
+    cat.includes('بياض') ||
+    (cat === 'feed_purchase' && desc.includes('بياض'))
+  ) {
+    const acc = byCode('50102');
+    if (acc) return { id: acc.id, code: acc.code, name: acc.name };
+    return { id: 'acc-50102', code: '50102', name: 'مصروفات شراء واستخدام العلف البياض' };
+  }
+
+  if (
+    cat === 'feed_purchase' ||
+    cat === 'feed_purchase_starter' ||
+    cat === 'starter_feed' ||
+    cat === 'cogs_feed_starter' ||
+    cat.includes('بدائي') ||
+    cat.includes('بادي') ||
+    cat.includes('نامي')
+  ) {
+    const acc = byCode('50101');
+    if (acc) return { id: acc.id, code: acc.code, name: acc.name };
+    return { id: 'acc-50101', code: '50101', name: 'مصروفات شراء واستخدام العلف البدائي' };
+  }
+
+  // 3. الفصل الدقيق لحسابات البترول (السيارة 50103 vs المتر 50104)
+  if (
+    cat === 'delivery_petrol_motor' ||
+    cat === 'petrol_motor' ||
+    cat.includes('متر') ||
+    cat.includes('دراجة') ||
+    (cat === 'delivery_petrol' && (desc.includes('متر') || desc.includes('دراجة') || desc.includes('نارية')))
+  ) {
+    const acc = byCode('50104');
+    if (acc) return { id: acc.id, code: acc.code, name: acc.name };
+    return { id: 'acc-50104', code: '50104', name: 'مصروفات البترول - المتر' };
+  }
+
+  if (
+    cat === 'delivery_petrol' ||
+    cat === 'delivery_petrol_car' ||
+    cat === 'petrol_car' ||
+    cat.includes('بترول') ||
+    cat.includes('محروقات') ||
+    cat.includes('سيارة')
+  ) {
+    const acc = byCode('50103');
+    if (acc) return { id: acc.id, code: acc.code, name: acc.name };
+    return { id: 'acc-50103', code: '50103', name: 'مصروفات البترول - السيارة' };
+  }
+
+  // 4. الفصل الدقيق بين التغليف والتعبئة (50109) ونشارة الخشب (50110)
+  if (
+    cat === 'packaging' ||
+    cat.includes('تغليف') ||
+    cat.includes('أطباق') ||
+    cat.includes('كراتين') ||
+    (cat === 'packaging_bedding' && (desc.includes('طبق') || desc.includes('كرتون') || desc.includes('تغليف')))
+  ) {
+    const acc = byCode('50109');
+    if (acc) return { id: acc.id, code: acc.code, name: acc.name };
+    return { id: 'acc-50109', code: '50109', name: 'مصروفات التغليف والتعبئة (أطباق وكراتين)' };
+  }
+
+  if (
+    cat === 'bedding' ||
+    cat === 'packaging_bedding' ||
+    cat.includes('نشارة') ||
+    cat.includes('فرشة')
+  ) {
+    const acc = byCode('50110');
+    if (acc) return { id: acc.id, code: acc.code, name: acc.name };
+    return { id: 'acc-50110', code: '50110', name: 'مصروفات نشارة الخشب وفرشة العنابر' };
+  }
+
+  // 5. باقي تصنيفات المصروفات
+  if (cat === 'medication_supplies' || cat === 'medications_vitamins' || cat.includes('دواء') || cat.includes('علاج') || cat.includes('بيطر')) {
+    const acc = byCode('50105');
+    if (acc) return { id: acc.id, code: acc.code, name: acc.name };
+    return { id: 'acc-50105', code: '50105', name: 'مصروفات الأدوية واللقاحات البيطرية' };
+  }
+
+  if (cat === 'salaries_advances' || cat.includes('رواتب') || cat.includes('أجور') || cat.includes('سلف')) {
+    const acc = byCode('50106');
+    if (acc) return { id: acc.id, code: acc.code, name: acc.name };
+    return { id: 'acc-50106', code: '50106', name: 'مصروفات رواتب وأجور وسلفيات العمال' };
+  }
+
+  if (cat === 'equipment_maintenance' || cat === 'utilities_maintenance' || cat.includes('صيانة')) {
+    const acc = byCode('50107');
+    if (acc) return { id: acc.id, code: acc.code, name: acc.name };
+    return { id: 'acc-50107', code: '50107', name: 'مصروفات صيانة العنابر والأقفاص والمعدات' };
+  }
+
+  if (cat === 'electricity_water' || cat.includes('كهرباء') || cat.includes('مياه')) {
+    const acc = byCode('50108');
+    if (acc) return { id: acc.id, code: acc.code, name: acc.name };
+    return { id: 'acc-50108', code: '50108', name: 'مصروفات كهرباء ومياه وتشغيل' };
+  }
+
+  // الحساب الافتراضي للمصروفات الإدارية والنثريات
+  const fallbackAcc = byCode('50111') || allAccounts.find((a) => a.type === 'expense');
+  if (fallbackAcc) return { id: fallbackAcc.id, code: fallbackAcc.code, name: fallbackAcc.name };
+  return { id: 'acc-50111', code: '50111', name: 'مصروفات إدارية ونثريات عامة' };
+}
+
+/**
+ * 4. دالة تسجيل قيد مصروف آلي متوازن ديناميكياً وفق شجرة الحسابات
  * Automated Expense Journal Entry Function
  */
 export async function recordExpenseJournalEntry(expense: ExpenseRecord): Promise<JournalEntry> {
@@ -660,71 +1127,32 @@ export async function recordExpenseJournalEntry(expense: ExpenseRecord): Promise
     throw new Error('مبلغ المصروف يجب أن يكون أكبر من الصفر.');
   }
 
-  // Determine Expense Account based on category
-  let expenseAccountId = 'acc-50107'; // Default general
-  let expenseAccountCode = '50107';
-  let expenseAccountName = 'مصروفات إدارية ونثريات عامة';
+  // جلب كافة حسابات الشجرة لتحديد الحساب بدقة مع مراعاة أي تعديل لأسماء الحسابات قام به المستخدم
+  const allAccounts = await db.accounts.toArray();
+  const resolved = resolveExpenseAccount(expense.category, expense.description, allAccounts);
 
-  switch (expense.category) {
-    case 'feed_purchase':
-      expenseAccountId = 'acc-50101';
-      expenseAccountCode = '50101';
-      expenseAccountName = 'مصروفات شراء واستخدام الأعلاف';
-      break;
-    case 'medication_supplies':
-    case 'medications_vitamins':
-      expenseAccountId = 'acc-50102';
-      expenseAccountCode = '50102';
-      expenseAccountName = 'مصروفات الأدوية واللقاحات البيطرية';
-      break;
-    case 'delivery_petrol':
-      expenseAccountId = 'acc-50103';
-      expenseAccountCode = '50103';
-      expenseAccountName = 'مصروفات المحروقات وبترول التوصيل';
-      break;
-    case 'salaries_advances':
-      expenseAccountId = 'acc-50104';
-      expenseAccountCode = '50104';
-      expenseAccountName = 'مصروفات رواتب وأجور وسلفيات العمال';
-      break;
-    case 'equipment_maintenance':
-    case 'utilities_maintenance':
-      expenseAccountId = 'acc-50105';
-      expenseAccountCode = '50105';
-      expenseAccountName = 'مصروفات صيانة الأقفاص والمعدات والعنابر';
-      break;
-    case 'electricity_water':
-      expenseAccountId = 'acc-50106';
-      expenseAccountCode = '50106';
-      expenseAccountName = 'مصروفات كهرباء ومياه وتشغيل';
-      break;
-    case 'packaging_bedding':
-      expenseAccountId = 'acc-50108';
-      expenseAccountCode = '50108';
-      expenseAccountName = 'مصروفات نشارة الخشب ومستلزمات التعبئة والأطباق';
-      break;
-  }
-
-  // Payment source account (Credit)
+  // حساب مصدر السداد (دائن - الصندوق أو البنك)
   const paidFromAccountId =
     expense.paidFrom === 'bank_account' ? 'acc-10105' : 'acc-10101';
-  const paidFromAccount = await db.accounts.get(paidFromAccountId);
+  const paidFromAccount =
+    (await db.accounts.get(paidFromAccountId)) ||
+    (await db.accounts.where('code').equals(expense.paidFrom === 'bank_account' ? '10105' : '10101').first());
 
   const lines: Omit<JournalEntryLine, 'id'>[] = [
-    // الطرف المدين: المصروف
+    // الطرف المدين: حساب المصروف المحدد
     {
-      accountId: expenseAccountId,
-      accountCode: expenseAccountCode,
-      accountName: expenseAccountName,
+      accountId: resolved.id,
+      accountCode: resolved.code,
+      accountName: resolved.name,
       debit: amount,
       credit: 0,
-      description: expense.description || 'صرف مصروف للمزرعة',
+      description: expense.description || `صرف مصروف (${resolved.name})`,
     },
     // الطرف الدائن: الصندوق أو البنك
     {
       accountId: paidFromAccountId,
-      accountCode: paidFromAccount?.code || '10101',
-      accountName: paidFromAccount?.name || 'الصندوق الرئيسي (كاش)',
+      accountCode: paidFromAccount?.code || (expense.paidFrom === 'bank_account' ? '10105' : '10101'),
+      accountName: paidFromAccount?.name || (expense.paidFrom === 'bank_account' ? 'الحساب البنكي الجاري' : 'الصندوق الرئيسي (كاش)'),
       debit: 0,
       credit: amount,
       description: `دفع مصروف نقداً/بنك - سند ${expense.invoiceOrBillRef || expense.id}`,
@@ -733,7 +1161,7 @@ export async function recordExpenseJournalEntry(expense: ExpenseRecord): Promise
 
   return await createJournalEntry({
     date: expense.date,
-    description: `قيد صرف مصروف: ${expenseAccountName} - ${expense.description || ''}`,
+    description: `قيد صرف مصروف: ${resolved.name} - ${expense.description || ''}`,
     referenceType: 'expense',
     referenceId: expense.id,
     referenceNumber: expense.invoiceOrBillRef,
@@ -1260,34 +1688,33 @@ export async function getIncomeStatementReport(
   const grossProfit = netRevenues - totalCogs;
   const grossMarginPct = netRevenues > 0 ? Math.round((grossProfit / netRevenues) * 100) : 0;
 
-  // 3. Operating Expenses Breakdown
-  const expensesByCategory: Record<string, number> = {};
+  // 3. Operating Expenses Breakdown (تحليل وتفصيل المصروفات التشغيلية وفق شجرة الحسابات)
+  const allAccounts = await db.accounts.toArray();
+  const expensesByAccount: Record<string, { code: string; name: string; amount: number }> = {};
+
   for (const exp of periodExpenses) {
-    const cat = exp.category || 'other';
-    expensesByCategory[cat] = (expensesByCategory[cat] || 0) + (Number(exp.amount) || 0);
-  }
+    const amt = Number(exp.amount) || 0;
+    const resolved = resolveExpenseAccount(exp.category, exp.description, allAccounts);
+    const key = resolved.code;
 
-  const categoryNames: Record<string, { code: string; name: string }> = {
-    feed_purchase: { code: '50101', name: 'مصروفات شراء واستخدام الأعلاف' },
-    medications_vitamins: { code: '50102', name: 'مصروفات الأدوية واللقاحات البيطرية' },
-    delivery_petrol: { code: '50103', name: 'مصروفات المحروقات وبترول التوصيل' },
-    salaries_advances: { code: '50104', name: 'مصروفات رواتب وأجور وسلفيات العمال' },
-    utilities_maintenance: { code: '50105', name: 'مصروفات صيانة العنابر والأقفاص والمعدات' },
-    electricity_water: { code: '50106', name: 'مصروفات كهرباء ومياه وتشغيل' },
-    packaging_bedding: { code: '50108', name: 'مصروفات نشارة الخشب والأطباق وكراتين التعبئة' },
-    other: { code: '50107', name: 'مصروفات إدارية ونثريات عامة' },
-  };
-
-  const operatingExpenses: IncomeStatementLine[] = Object.entries(expensesByCategory).map(
-    ([catKey, amt]) => {
-      const meta = categoryNames[catKey] || { code: '50107', name: catKey };
-      return {
-        code: meta.code,
-        name: meta.name,
-        amount: amt,
+    if (!expensesByAccount[key]) {
+      expensesByAccount[key] = {
+        code: resolved.code,
+        name: resolved.name,
+        amount: 0,
       };
     }
-  );
+    expensesByAccount[key].amount += amt;
+  }
+
+  // ترتيب سطور المصروفات تصاعدياً بحسب الكود المحاسبي
+  const operatingExpenses: IncomeStatementLine[] = Object.values(expensesByAccount)
+    .sort((a, b) => a.code.localeCompare(b.code))
+    .map((item) => ({
+      code: item.code,
+      name: item.name,
+      amount: item.amount,
+    }));
 
   const totalOperatingExpenses = operatingExpenses.reduce((sum, item) => sum + item.amount, 0);
   const netIncome = grossProfit - totalOperatingExpenses;
@@ -1309,6 +1736,141 @@ export async function getIncomeStatementReport(
     totalOperatingExpenses,
     netIncome,
     netMarginPct,
+  };
+}
+
+// =========================================================================
+// 8.1 قائمة المركز المالي / الميزانية العمومية (Balance Sheet)
+// =========================================================================
+
+export interface BalanceSheetItem {
+  code: string;
+  name: string;
+  balance: number;
+}
+
+export interface BalanceSheetReport {
+  asOfDate: string;
+  assets: {
+    currentAssets: BalanceSheetItem[];
+    totalCurrentAssets: number;
+    fixedAssets: BalanceSheetItem[];
+    totalFixedAssets: number;
+    totalAssets: number;
+  };
+  liabilities: {
+    currentLiabilities: BalanceSheetItem[];
+    totalCurrentLiabilities: number;
+    longTermLiabilities: BalanceSheetItem[];
+    totalLongTermLiabilities: number;
+    totalLiabilities: number;
+  };
+  equity: {
+    capital: BalanceSheetItem[];
+    totalCapital: number;
+    retainedEarnings: BalanceSheetItem[];
+    totalRetainedEarnings: number;
+    unclosedNetIncome: number;
+    totalEquity: number;
+  };
+  totalLiabilitiesAndEquity: number;
+  isBalanced: boolean;
+  difference: number;
+}
+
+/**
+ * توليد تقرير قائمة المركز المالي (الميزانية العمومية) حتى تاريخ محدد
+ * الأصول = الخصوم + حقوق الملكية (Assets = Liabilities + Equity)
+ */
+export async function getBalanceSheetReport(asOfDate?: string): Promise<BalanceSheetReport> {
+  await initializeChartOfAccounts();
+  const accounts = await db.accounts.toArray();
+
+  const assetAccs = accounts.filter((a) => a.type === 'asset' && a.isActive !== false);
+  const liabilityAccs = accounts.filter((a) => a.type === 'liability' && a.isActive !== false);
+  const equityAccs = accounts.filter((a) => a.type === 'equity' && a.isActive !== false);
+  const revenueAccs = accounts.filter((a) => a.type === 'revenue');
+  const expenseAccs = accounts.filter((a) => a.type === 'expense');
+
+  // 1. الأصول المتداولة: النقدية، المحافظ، البنوك، العملاء، المخزون
+  const currentAssets: BalanceSheetItem[] = assetAccs
+    .filter((a) => a.subType !== 'fixed_asset')
+    .map((a) => ({ code: a.code, name: a.name, balance: a.currentBalance }));
+  const totalCurrentAssets = currentAssets.reduce((sum, item) => sum + item.balance, 0);
+
+  // الأصول الثابتة: معدات، عنابر، سيارات، بطاريات
+  const fixedAssets: BalanceSheetItem[] = assetAccs
+    .filter((a) => a.subType === 'fixed_asset')
+    .map((a) => ({ code: a.code, name: a.name, balance: a.currentBalance }));
+  const totalFixedAssets = fixedAssets.reduce((sum, item) => sum + item.balance, 0);
+
+  const totalAssets = totalCurrentAssets + totalFixedAssets;
+
+  // 2. الخصوم المتداولة: الموردون، رواتب مستحقة، التزامات قصيرة
+  const currentLiabilities: BalanceSheetItem[] = liabilityAccs
+    .filter((a) => a.subType !== 'long_term')
+    .map((a) => ({ code: a.code, name: a.name, balance: a.currentBalance }));
+  const totalCurrentLiabilities = currentLiabilities.reduce((sum, item) => sum + item.balance, 0);
+
+  // الخصوم طويلة الأجل
+  const longTermLiabilities: BalanceSheetItem[] = liabilityAccs
+    .filter((a) => a.subType === 'long_term')
+    .map((a) => ({ code: a.code, name: a.name, balance: a.currentBalance }));
+  const totalLongTermLiabilities = longTermLiabilities.reduce((sum, item) => sum + item.balance, 0);
+
+  const totalLiabilities = totalCurrentLiabilities + totalLongTermLiabilities;
+
+  // 3. حقوق الملكية
+  // رأس المال
+  const capital: BalanceSheetItem[] = equityAccs
+    .filter((a) => a.code === '30101' || a.subType === 'capital')
+    .map((a) => ({ code: a.code, name: a.name, balance: a.currentBalance }));
+  const totalCapital = capital.reduce((sum, item) => sum + item.balance, 0);
+
+  // الأرباح المحتجزة / المدورة
+  const retainedEarnings: BalanceSheetItem[] = equityAccs
+    .filter((a) => a.code !== '30101' && a.subType !== 'capital')
+    .map((a) => ({ code: a.code, name: a.name, balance: a.currentBalance }));
+  const totalRetainedEarnings = retainedEarnings.reduce((sum, item) => sum + item.balance, 0);
+
+  // صافي أرباح/خسائر الفترة الحالية غير المقفلة بعد (Revenues - Expenses)
+  const totalRevs = revenueAccs.reduce((sum, a) => sum + Math.abs(a.currentBalance), 0);
+  const totalExps = expenseAccs.reduce((sum, a) => sum + Math.abs(a.currentBalance), 0);
+  const unclosedNetIncome = totalRevs - totalExps;
+
+  const totalEquity = totalCapital + totalRetainedEarnings + unclosedNetIncome;
+  const totalLiabilitiesAndEquity = totalLiabilities + totalEquity;
+
+  const difference = Math.abs(totalAssets - totalLiabilitiesAndEquity);
+  const isBalanced = difference < 0.05;
+
+  return {
+    asOfDate: asOfDate || new Date().toISOString().split('T')[0],
+    assets: {
+      currentAssets,
+      totalCurrentAssets,
+      fixedAssets,
+      totalFixedAssets,
+      totalAssets,
+    },
+    liabilities: {
+      currentLiabilities,
+      totalCurrentLiabilities,
+      longTermLiabilities,
+      totalLongTermLiabilities,
+      totalLiabilities,
+    },
+    equity: {
+      capital,
+      totalCapital,
+      retainedEarnings,
+      totalRetainedEarnings,
+      unclosedNetIncome,
+      totalEquity,
+    },
+    totalLiabilitiesAndEquity,
+    isBalanced,
+    difference,
   };
 }
 
